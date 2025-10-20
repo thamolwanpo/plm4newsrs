@@ -716,7 +716,7 @@ pytest tests/test_training.py::test_multi_gpu_training -v
 ## 📦 Project Structure
 ```
 plm4newsrs/
-├── configs/                    # Configuration files
+├── configs/                   # Configuration files
 │   ├── base_config.py         # Shared configuration
 │   ├── models/                # Model-specific configs
 │   │   ├── base_model_config.py
@@ -726,17 +726,18 @@ plm4newsrs/
 ├── src/
 │   ├── data/                  # Data loading & preprocessing
 │   ├── models/                # Model architectures
-│   │   ├── base/             # Base model
-│   │   ├── naml/             # NAML architecture
-│   │   ├── nrms/             # NRMS architecture
-│   │   ├── components/       # Shared components
-│   │   └── registry.py       # Model factory
-│   ├── embeddings/           # Embedding utilities
-│   ├── training/             # Training & callbacks
-│   ├── evaluation/           # Metrics & evaluation
-│   └── utils/                # Utilities
+│   │   ├── base/              # Base model
+│   │   ├── naml/              # NAML architecture
+│   │   ├── nrms/              # NRMS architecture
+│   │   ├── components/        # Shared components
+│   │   └── registry.py        # Model factory
+│   ├── embeddings/            # Embedding utilities
+│   ├── training/              # Training & callbacks
+│   ├── evaluation/            # Metrics & evaluation
+│   └── utils/                 # Utilities
 ├── scripts/                   # Training & evaluation scripts
 ├── notebooks/                 # Jupyter notebooks
+├── lm_models/                 # LM models including GloVe
 └── tests/                     # Unit tests
 ```
 
