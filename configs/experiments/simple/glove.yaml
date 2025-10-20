@@ -1,0 +1,40 @@
+# Dataset configuration
+dataset: "politifact"
+experiment_name: "simple_model"
+model_type: "clean"
+
+# Model architecture
+model_name: "glove"
+use_pretrained_lm: true  # Using pretrained GloVe
+fine_tune_lm: false  # GloVe is always frozen
+
+# GloVe-specific settings
+glove_file_path: "lm_models/glove.42B.300d.txt"  # Path to GloVe file
+glove_model: "glove-42B-300"  # Name for logging
+glove_dim: 300
+glove_aggregation: "attention"  # Options: "mean", "max", "attention"
+
+# Architecture hyperparameters
+max_seq_length: 50
+max_history_length: 5
+news_query_vector_dim: 200
+user_query_vector_dim: 200
+drop_rate: 0.2
+
+# Training hyperparameters
+epochs: 20  # GloVe typically needs more epochs
+train_batch_size: 32
+val_batch_size: 64
+learning_rate: 1.0e-3  # Higher LR for GloVe
+early_stopping_patience: 5
+
+# Paths
+base_dir: null
+models_dir: null
+
+# Reproducibility
+seed: 42
+
+# Additional training options
+gradient_clip_val: 1.0
+warmup_steps: 0

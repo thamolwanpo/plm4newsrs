@@ -205,3 +205,12 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+
+# LM Models
+lm_models/
+
+# Data and Output files
+outputs/
+data/
+benchmarks/

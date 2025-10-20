@@ -4,16 +4,15 @@ torchvision>=0.15.0
 lightning>=2.0.0
 torchmetrics>=0.11.0
 
-# Transformers and NLP
-transformers>=4.30.0
-tokenizers>=0.13.0
-sentencepiece>=0.1.99
-gensim>=4.3.0
-
 # Data processing
 pandas>=1.5.0
 numpy>=1.23.0
 scipy>=1.10.0
+
+# Transformers and NLP
+transformers>=4.30.0
+tokenizers>=0.13.0
+sentencepiece>=0.1.99
 
 # Utilities
 tqdm>=4.65.0
@@ -38,6 +37,10 @@ flake8>=6.0.0
 pylint>=2.17.0
 mypy>=1.3.0
 pre-commit>=3.3.0
+
+# TensorBoard (optional)
+TensorBoard>=2.12.0
+tensorboardX>=2.6.0
 
 # Documentation (optional)
 # Install with: pip install -e ".[docs]"
