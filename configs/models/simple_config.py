@@ -96,6 +96,7 @@ class ModelConfig(BaseConfig):
 
         paths["models_dir"] = models_dir
 
+        # Data paths
         if self.model_type == "clean":
             paths["train_csv"] = self.data_dir / "train_clean.csv"
             paths["val_csv"] = self.data_dir / "val_clean.csv"
@@ -103,8 +104,10 @@ class ModelConfig(BaseConfig):
             paths["train_csv"] = self.data_dir / f"train_{self.model_type}.csv"
             paths["val_csv"] = self.data_dir / f"val_{self.model_type}.csv"
 
-        paths["benchmarks_dir"] = self.benchmark_dir / "benchmarks"
+        # Benchmark path - ADD THIS
+        paths["benchmarks_dir"] = self.benchmark_dir
 
+        # Create directories
         for key in ["checkpoints_dir", "logs_dir", "results_dir"]:
             paths[key].mkdir(parents=True, exist_ok=True)
 

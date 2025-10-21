@@ -212,5 +212,5 @@ lm_models/
 
 # Data and Output files
 outputs/
-data/
+data/politifact/
 benchmarks/

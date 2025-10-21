@@ -9,7 +9,7 @@ import lightning as pl
 from lightning.pytorch.callbacks import ModelCheckpoint, EarlyStopping
 from lightning.pytorch.loggers import TensorBoardLogger
 
-from src.data import NewsDataset, create_dataset
+from src.data import NewsDataset
 from src.data.collate import collate_fn
 from src.models.simple import LitRecommender
 from src.utils.seed import set_seed

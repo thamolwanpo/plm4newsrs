@@ -42,8 +42,16 @@ class BaseConfig:
         else:
             self.base_dir = Path(self.base_dir)
 
-        self.data_dir = Path(f"data/{self.dataset}")
-        self.benchmark_dir = Path(f"benchmarks/{self.dataset}")
+        # Set default paths
+        if self.data_dir is None:
+            self.data_dir = Path(f"data/{self.dataset}")
+        else:
+            self.data_dir = Path(self.data_dir)
+
+        if self.benchmark_dir is None:  # ← ADD THIS
+            self.benchmark_dir = Path(f"benchmarks/{self.dataset}")
+        else:
+            self.benchmark_dir = Path(self.benchmark_dir)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert config to dictionary."""
