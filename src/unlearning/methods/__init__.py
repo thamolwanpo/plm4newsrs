@@ -12,8 +12,8 @@ def register_method(name: str):
     Decorator to register unlearning methods.
 
     Example:
-        >>> @register_method("influence")
-        >>> class InfluenceUnlearning(BaseUnlearningMethod):
+        >>> @register_method("first_order")
+        >>> class FirstOrderUnlearning(BaseUnlearningMethod):
         ...     pass
     """
 
@@ -31,7 +31,7 @@ def get_unlearning_method(
     Factory function to get unlearning method by name.
 
     Args:
-        name: Method name (e.g., "influence", "gradient_ascent")
+        name: Method name (e.g., "first_order")
         model: Model to unlearn from
         model_config: Model configuration
         unlearn_config: Unlearning configuration
@@ -42,7 +42,7 @@ def get_unlearning_method(
 
     Example:
         >>> method = get_unlearning_method(
-        ...     name="influence",
+        ...     name="first_order",
         ...     model=model,
         ...     model_config=model_config,
         ...     unlearn_config=unlearn_config,
@@ -52,7 +52,11 @@ def get_unlearning_method(
     """
     if name not in METHOD_REGISTRY:
         available = list(METHOD_REGISTRY.keys())
-        raise ValueError(f"Unknown unlearning method: '{name}'\n" f"Available methods: {available}")
+        raise ValueError(
+            f"Unknown unlearning method: '{name}'\n"
+            f"Available methods: {available}\n"
+            f"Registry contents: {METHOD_REGISTRY}"
+        )
 
     method_class = METHOD_REGISTRY[name]
     return method_class(model, model_config, unlearn_config, device)
@@ -68,7 +72,7 @@ def list_unlearning_methods() -> list:
     Example:
         >>> methods = list_unlearning_methods()
         >>> print(methods)
-        ['influence', 'gradient_ascent', 'fine_tuning']
+        ['first_order']
     """
     return list(METHOD_REGISTRY.keys())
 
@@ -93,7 +97,21 @@ def print_method_info():
     print(f"{'='*70}\n")
 
 
-# This will be populated as methods are implemented
+# CRITICAL: Import method modules to trigger @register_method decorator
+# Must be at the END of the file, after register_method is defined
+# print("[DEBUG] Attempting to import first_order module...")
+
+try:
+    from .first_order import FirstOrderUnlearning
+
+    # print(f"[DEBUG] Successfully imported FirstOrderUnlearning")
+    # print(f"[DEBUG] Registry now contains: {list(METHOD_REGISTRY.keys())}")
+except ImportError as e:
+    print(f"[DEBUG] Failed to import first_order: {e}")
+    import traceback
+
+    traceback.print_exc()
+
 __all__ = [
     "METHOD_REGISTRY",
     "register_method",

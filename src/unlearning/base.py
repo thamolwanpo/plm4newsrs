@@ -7,7 +7,7 @@ import torch
 import torch.nn as nn
 
 from configs import BaseConfig
-from configs.unlearning.base_unlearning import UnlearningConfig
+from configs.unlearning.base_unlearning import BaseUnlearningConfig
 
 
 class BaseUnlearningMethod(ABC):
@@ -27,7 +27,7 @@ class BaseUnlearningMethod(ABC):
         self,
         model: nn.Module,
         model_config: BaseConfig,
-        unlearn_config: UnlearningConfig,
+        unlearn_config: BaseUnlearningConfig,
         device: torch.device,
     ):
         """
@@ -55,9 +55,6 @@ class BaseUnlearningMethod(ABC):
         print(f"{'='*70}")
         print(f"Model: {model_config.model_name}")
         print(f"Device: {device}")
-        print(f"Method hyperparameters:")
-        for k, v in self.get_hyperparameters().items():
-            print(f"  {k}: {v}")
         print(f"{'='*70}\n")
 
     @abstractmethod
@@ -235,7 +232,7 @@ class IterativeUnlearningMethod(BaseUnlearningMethod):
         self,
         model: nn.Module,
         model_config: BaseConfig,
-        unlearn_config: UnlearningConfig,
+        unlearn_config: BaseUnlearningConfig,
         device: torch.device,
     ):
         super().__init__(model, model_config, unlearn_config, device)

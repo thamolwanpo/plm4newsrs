@@ -7,7 +7,7 @@ from .models.nrms_config import NRMSConfig
 
 # Registry mapping architecture names to config classes
 CONFIG_REGISTRY: Dict[str, Type[BaseConfig]] = {
-    "base": ModelConfig,
+    "simple": ModelConfig,
     "naml": NAMLConfig,
     "nrms": NRMSConfig,
 }
@@ -18,7 +18,7 @@ def get_config_class(architecture: str) -> Type[BaseConfig]:
     Get config class for a given architecture.
 
     Args:
-        architecture: Architecture name ("base", "naml", "nrms")
+        architecture: Architecture name ("simple", "naml", "nrms")
 
     Returns:
         Config class
