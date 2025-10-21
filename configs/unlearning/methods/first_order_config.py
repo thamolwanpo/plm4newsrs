@@ -1,11 +1,11 @@
 # configs/unlearning/methods/first_order_config.py
 
 from dataclasses import dataclass
-from configs.unlearning.base_unlearning import UnlearningConfig
+from configs.unlearning.base_unlearning import BaseUnlearningConfig
 
 
 @dataclass
-class FirstOrderConfig(UnlearningConfig):
+class FirstOrderConfig(BaseUnlearningConfig):
     """
     Configuration for first-order machine unlearning.
 
