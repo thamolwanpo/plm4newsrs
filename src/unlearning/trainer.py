@@ -352,10 +352,10 @@ def _save_unlearned_model(
     unlearning_time: float,
 ) -> Path:
     """
-    Save unlearned model checkpoint.
+    Save unlearned model as proper Lightning checkpoint (matching training checkpoint format).
 
     Args:
-        unlearned_model: The unlearned model
+        unlearned_model: The unlearned model (raw nn.Module from unlearning method)
         model_config: Model configuration
         unlearn_config: Unlearning configuration
         evaluation_results: Evaluation results
@@ -367,38 +367,83 @@ def _save_unlearned_model(
     paths = model_config.get_paths()
     checkpoints_dir = paths["checkpoints_dir"]
 
-    # Create filename
+    # Create filename with evaluation metrics
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"unlearned_{unlearn_config.method}_{timestamp}.ckpt"
+
+    if evaluation_results:
+        forget_flip = evaluation_results["forget_quality"]["after"]["positive_flip_rate"]
+        retain_auc = evaluation_results["utility"]["retain_after"].get(
+            "auc", evaluation_results["utility"]["retain_after"]["accuracy"]
+        )
+        filename = f"unlearned-{unlearn_config.method}-flip={forget_flip:.4f}-retain_auc={retain_auc:.4f}-{timestamp}.ckpt"
+    else:
+        filename = f"unlearned-{unlearn_config.method}-{timestamp}.ckpt"
+
     checkpoint_path = checkpoints_dir / filename
 
-    # Prepare checkpoint
+    # Wrap raw model back into LitRecommender to get proper state_dict format
+    from src.models.simple import LitRecommender
+
+    lit_model = LitRecommender(model_config)
+    lit_model.model.load_state_dict(unlearned_model.state_dict())
+
+    # Create checkpoint matching PyTorch Lightning format
+    import pytorch_lightning as pl
+
     checkpoint = {
-        "model_state_dict": unlearned_model.state_dict(),
-        "model_config": model_config.__dict__,
-        "unlearn_config": unlearn_config.__dict__,
-        "unlearning_method": unlearn_config.method,
-        "unlearning_time": unlearning_time,
-        "timestamp": timestamp,
+        # Standard Lightning keys
+        "state_dict": lit_model.state_dict(),
+        "epoch": 0,  # Unlearning happens post-training
+        "global_step": 0,
+        "pytorch-lightning_version": pl.__version__,
+        "hyper_parameters": {
+            # Model config as hyper_parameters (Lightning expects this)
+            **model_config.__dict__,
+        },
+        # Custom unlearning metadata (won't interfere with Lightning loading)
+        "unlearning_metadata": {
+            "method": unlearn_config.method,
+            "unlearn_config": {
+                k: str(v) if isinstance(v, Path) else v for k, v in unlearn_config.__dict__.items()
+            },
+            "unlearning_time": unlearning_time,
+            "timestamp": timestamp,
+        },
     }
 
     # Add evaluation results if available
     if evaluation_results:
-        checkpoint["evaluation_summary"] = {
+        checkpoint["unlearning_metadata"]["evaluation_summary"] = {
             "forget_efficacy": evaluation_results["forget_quality"]["efficacy"],
-            "retain_accuracy": evaluation_results["utility"]["retain_after"]["accuracy"],
+            "forget_flip_rate": evaluation_results["forget_quality"]["after"]["positive_flip_rate"],
+            "forget_auc": evaluation_results["forget_quality"]["after"]["auc"],
+            "retain_auc": evaluation_results["utility"]["retain_after"].get(
+                "auc", evaluation_results["utility"]["retain_after"]["accuracy"]
+            ),
             "overall_score": evaluation_results["overall"]["overall_score"],
             "grade": evaluation_results["overall"]["grade"],
         }
 
-    # Save
+        # Also save at checkpoint level for easy access
+        checkpoint["val_auc"] = evaluation_results["utility"]["retain_after"].get(
+            "auc", evaluation_results["utility"]["retain_after"]["accuracy"]
+        )
+        checkpoint["forget_flip_rate"] = evaluation_results["forget_quality"]["after"][
+            "positive_flip_rate"
+        ]
+
+    # Save checkpoint
     torch.save(checkpoint, checkpoint_path)
 
-    print(f"Checkpoint saved: {checkpoint_path}")
+    print(f"✅ Checkpoint saved (Lightning-compatible): {checkpoint_path}")
     print(f"  Method: {unlearn_config.method}")
     print(f"  Time: {unlearning_time:.2f}s")
     if evaluation_results:
-        print(f"  Overall score: {checkpoint['evaluation_summary']['overall_score']:.4f}")
+        eval_summary = checkpoint["unlearning_metadata"]["evaluation_summary"]
+        print(f"  Overall score: {eval_summary['overall_score']:.4f} ({eval_summary['grade']})")
+        print(f"  Forget flip rate: {eval_summary['forget_flip_rate']:.4f}")
+        print(f"  Forget AUC: {eval_summary['forget_auc']:.4f}")
+        print(f"  Retain AUC: {eval_summary['retain_auc']:.4f}")
 
     return checkpoint_path
 

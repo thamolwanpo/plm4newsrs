@@ -48,20 +48,11 @@ def calculate_parameter_changes(
     model_before: torch.nn.Module, model_after: torch.nn.Module
 ) -> Dict[str, Any]:
     """
-    Calculate statistics about parameter changes.
-
-    Args:
-        model_before: Model before unlearning
-        model_after: Model after unlearning
-
-    Returns:
-        Dictionary with parameter change statistics
-
-    Example:
-        >>> changes = calculate_parameter_changes(model_before, model_after)
-        >>> print(f"Changed params: {changes['params_changed_pct']:.2f}%")
+    Calculate parameter changes ONLY for trainable parameters.
+    Ignores frozen parameters (like frozen GloVe embeddings or frozen LMs).
     """
     total_params = 0
+    trainable_params = 0
     params_changed = 0
     total_change = 0.0
     max_change = 0.0
@@ -73,16 +64,31 @@ def calculate_parameter_changes(
     ):
         assert name_before == name_after, "Model structures don't match"
 
+        num_params = param_before.numel()
+        total_params += num_params
+
+        # Skip if parameter wasn't trainable (frozen)
+        if not param_before.requires_grad:
+            changes_per_layer[name_before] = {
+                "num_params": num_params,
+                "num_changed": 0,
+                "pct_changed": 0.0,
+                "mean_change": 0.0,
+                "max_change": 0.0,
+                "was_frozen": True,
+            }
+            continue
+
+        trainable_params += num_params
+
         # Calculate difference
         diff = torch.abs(param_after.data - param_before.data)
 
         # Statistics
-        num_params = param_before.numel()
         num_changed = (diff > 1e-8).sum().item()
         mean_change = diff.mean().item()
         layer_max_change = diff.max().item()
 
-        total_params += num_params
         params_changed += num_changed
         total_change += mean_change * num_params
         max_change = max(max_change, layer_max_change)
@@ -93,13 +99,16 @@ def calculate_parameter_changes(
             "pct_changed": (num_changed / num_params) * 100 if num_params > 0 else 0,
             "mean_change": mean_change,
             "max_change": layer_max_change,
+            "was_frozen": False,
         }
 
-    avg_change = total_change / total_params if total_params > 0 else 0.0
-    pct_changed = (params_changed / total_params) * 100 if total_params > 0 else 0.0
+    avg_change = total_change / trainable_params if trainable_params > 0 else 0.0
+    pct_changed = (params_changed / trainable_params) * 100 if trainable_params > 0 else 0.0
 
     return {
         "total_params": total_params,
+        "trainable_params": trainable_params,
+        "frozen_params": total_params - trainable_params,
         "params_changed": params_changed,
         "params_changed_pct": pct_changed,
         "avg_change": avg_change,

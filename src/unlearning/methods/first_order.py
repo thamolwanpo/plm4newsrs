@@ -178,27 +178,22 @@ class FirstOrderUnlearning(BaseUnlearningMethod):
         """
         Apply single unlearning update step.
 
-        Implements: θ_new = θ* - α · (∇ℓ_forget - ∇ℓ_retain)
+        Based on original implementation:
+        - Z = data to FORGET
+        - Z̃ = data to RETAIN (corrected)
 
-        Steps:
-        1. Compute ∇ℓ(Z_forget, θ*) - average gradient on forget set
-        2. Compute ∇ℓ(Z_retain, θ*) - average gradient on retain set
-        3. Compute gradient difference with damping
-        4. Update parameters in the direction of gradient difference
+        Update: θ_new = θ* - τ · (∇ℓ(Z̃_retain) - ∇ℓ(Z_forget))
 
-        Args:
-            forget_loader: DataLoader for forget set
-            retain_loader: DataLoader for retain set
-
-        Returns:
-            Gradient norm (for monitoring)
+        This moves:
+        - TOWARD minimizing loss on retain set
+        - AWAY FROM minimizing loss on forget set
         """
-        # Step 1: Compute gradient on forget set
-        print("  1/4 Computing ∇ℓ_forget...")
+        # Step 1: Compute gradient on forget set (Z)
+        print("  1/4 Computing ∇ℓ(Z_forget)...")
         grad_forget = self._compute_average_gradient(forget_loader)
 
-        # Step 2: Compute gradient on retain set
-        print("  2/4 Computing ∇ℓ_retain...")
+        # Step 2: Compute gradient on retain set (Z̃)
+        print("  2/4 Computing ∇ℓ(Z̃_retain)...")
         grad_retain = self._compute_average_gradient(retain_loader)
 
         # Step 3: Compute gradient difference
@@ -206,27 +201,88 @@ class FirstOrderUnlearning(BaseUnlearningMethod):
         grad_diff = {}
         total_norm = 0.0
 
-        for name in grad_forget.keys():
-            if name in grad_retain:
-                # Δ∇ = ∇ℓ_forget - ∇ℓ_retain
-                diff = grad_forget[name] - grad_retain[name]
+        # Track gradient magnitudes for diagnostics
+        forget_norm = 0.0
+        retain_norm = 0.0
+        skipped_frozen = 0
+        skipped_missing = 0
 
-                # Apply damping for stability
-                if self.damping > 0:
-                    diff = diff / (1.0 + self.damping)
+        for name, param in self.model.named_parameters():
+            # CRITICAL: Skip frozen parameters
+            if not param.requires_grad:
+                skipped_frozen += 1
+                continue
 
-                grad_diff[name] = diff
-                total_norm += torch.sum(diff**2).item()
+            # Skip if gradients not available for this parameter
+            if name not in grad_forget or name not in grad_retain:
+                skipped_missing += 1
+                continue
+
+            # Accumulate norms
+            forget_norm += torch.sum(grad_forget[name] ** 2).item()
+            retain_norm += torch.sum(grad_retain[name] ** 2).item()
+
+            # CRITICAL FIX: Match original implementation
+            # Δ = ∇ℓ(Z̃_retain) - ∇ℓ(Z_forget)
+            diff = grad_retain[name] - grad_forget[name]
+
+            # Apply damping for numerical stability
+            if self.damping > 0:
+                diff = diff / (1.0 + self.damping)
+
+            grad_diff[name] = diff
+            total_norm += torch.sum(diff**2).item()
 
         grad_norm = torch.sqrt(torch.tensor(total_norm)).item()
 
+        # Diagnostic output
+        print(f"     ∇ℓ(Z_forget) norm: {torch.sqrt(torch.tensor(forget_norm)).item():.6f}")
+        print(f"     ∇ℓ(Z̃_retain) norm: {torch.sqrt(torch.tensor(retain_norm)).item():.6f}")
+        print(f"     Difference norm: {grad_norm:.6f}")
+        print(f"     Step size: {self.learning_rate * grad_norm:.6f}")
+        if skipped_frozen > 0:
+            print(f"     Skipped {skipped_frozen} frozen parameters")
+        if skipped_missing > 0:
+            print(f"     Skipped {skipped_missing} parameters (missing gradients)")
+
         # Step 4: Update parameters
+        # θ_new = θ* - τ · (∇ℓ_retain - ∇ℓ_forget)
         print("  4/4 Updating parameters...")
+        num_params_updated = 0
+        update_stats = []
+
         with torch.no_grad():
             for name, param in self.model.named_parameters():
+                # Only update if we have a gradient difference computed
                 if name in grad_diff:
-                    # θ_new = θ* - α · Δ∇
+                    # Apply update
                     param.data = param.data - self.learning_rate * grad_diff[name]
+                    num_params_updated += param.numel()
+
+                    # Track statistics (for debugging)
+                    update_norm = (self.learning_rate * grad_diff[name]).norm().item()
+                    param_norm = param.data.norm().item()
+                    update_stats.append(
+                        {
+                            "param": name,
+                            "update_norm": update_norm,
+                            "param_norm": param_norm,
+                            "relative_change": update_norm / (param_norm + 1e-8),
+                        }
+                    )
+
+        print(f"     Updated {num_params_updated:,} trainable parameters")
+
+        # Print top 3 largest updates (for debugging)
+        if update_stats:
+            update_stats.sort(key=lambda x: x["relative_change"], reverse=True)
+            print(f"     Largest relative changes:")
+            for stat in update_stats[:3]:
+                # Truncate long parameter names
+                param_name = stat["param"]
+                if len(param_name) > 50:
+                    param_name = param_name[:47] + "..."
+                print(f"       {param_name}: {stat['relative_change']:.6f}")
 
         return grad_norm
 
@@ -235,6 +291,7 @@ class FirstOrderUnlearning(BaseUnlearningMethod):
     ) -> Dict[str, torch.Tensor]:
         """
         Compute average gradient over entire dataset.
+        Only computes gradients for trainable parameters (requires_grad=True).
 
         This computes: (1/|Z|) · Σ ∇ℓ(z_i, θ)
 
@@ -243,11 +300,12 @@ class FirstOrderUnlearning(BaseUnlearningMethod):
 
         Returns:
             Dictionary mapping parameter names to average gradients
+            (only includes trainable parameters)
         """
         self.model.train()
         self.model.zero_grad()
 
-        # Accumulate gradients
+        # Accumulate gradients (only for trainable params)
         accumulated_grads = {}
         num_samples = 0
 
@@ -270,7 +328,11 @@ class FirstOrderUnlearning(BaseUnlearningMethod):
             loss.backward()
 
             # Accumulate gradients (weighted by batch size)
+            # ONLY for trainable parameters
             for name, param in self.model.named_parameters():
+                if not param.requires_grad:
+                    continue  # Skip frozen parameters
+
                 if param.grad is not None:
                     if name not in accumulated_grads:
                         accumulated_grads[name] = param.grad.clone() * batch_size
@@ -286,6 +348,16 @@ class FirstOrderUnlearning(BaseUnlearningMethod):
         avg_grads = {}
         for name, grad_sum in accumulated_grads.items():
             avg_grads[name] = grad_sum / num_samples
+
+        # Count trainable vs frozen
+        trainable_count = len(avg_grads)
+        total_count = sum(1 for _ in self.model.named_parameters())
+        frozen_count = total_count - trainable_count
+
+        if frozen_count > 0:
+            print(
+                f"     Computed gradients for {trainable_count} trainable params ({frozen_count} frozen)"
+            )
 
         return avg_grads
 

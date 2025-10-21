@@ -19,7 +19,7 @@ trial_idx: 0
 # ============================================
 # UNLEARNING PARAMETERS
 # ============================================
-unlearning_rate: 2.0e-5
+unlearning_rate: 5.0e-5
 batch_size: 16
 gradient_clip_val: 1.0
 

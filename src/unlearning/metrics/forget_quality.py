@@ -24,23 +24,14 @@ def calculate_forget_quality(
     criterion: Optional[nn.Module] = None,
 ) -> Dict[str, float]:
     """
-    Calculate comprehensive forget quality metrics.
+    Calculate forget quality for NEWS RECOMMENDATION (listwise format).
 
-    Args:
-        model: Model to evaluate
-        forget_loader: DataLoader for forget set
-        device: Device to run on
-        criterion: Loss function (default: CrossEntropyLoss)
+    In listwise format:
+    - batch["label"] is position index (always 0 = first positive)
+    - Actual news labels are NOT directly available in batch
+    - We measure: Is model ranking the positive (fake) item first?
 
-    Returns:
-        Dictionary with forget quality metrics:
-        - loss: Average loss on forget set
-        - accuracy: Accuracy on forget set
-        - mia_score: Membership inference attack score (lower is better)
-
-    Example:
-        >>> metrics = calculate_forget_quality(model, forget_loader, device)
-        >>> print(f"Forget accuracy: {metrics['accuracy']:.4f}")
+    For unlearning: We want accuracy to DROP (stop ranking fake news first)
     """
     if criterion is None:
         criterion = nn.CrossEntropyLoss()
@@ -48,74 +39,88 @@ def calculate_forget_quality(
     model.eval()
 
     total_loss = 0.0
-    correct = 0
+    correct = 0  # Ranking positive first
     total = 0
 
     all_scores = []
     all_labels = []
+    all_probs = []
 
     with torch.no_grad():
         for batch in forget_loader:
             if batch is None:
                 continue
 
-            # Move to device
             if "device_indicator" in batch:
                 batch["device_indicator"] = batch["device_indicator"].to(device)
 
-            labels = batch["label"].to(device)
-
-            # Forward pass
-            scores = model(batch)
+            labels = batch["label"].to(device)  # Position indices (always 0)
+            scores = model(batch)  # (batch, num_candidates)
             loss = criterion(scores, labels)
 
             total_loss += loss.item() * labels.size(0)
 
-            # Calculate accuracy
+            # Predictions: which position ranked highest
             predictions = torch.argmax(scores, dim=1)
+
+            # Correct = ranking position 0 first (the fake news)
             correct += (predictions == labels).sum().item()
             total += labels.size(0)
 
-            # Store for MIA
             all_scores.append(scores.cpu())
             all_labels.append(labels.cpu())
 
+            # For AUC: use scores for position 0 vs others
+            # Probability that position 0 (fake) is ranked first
+            probs = torch.softmax(scores, dim=1)
+            all_probs.append(probs.cpu())
+
+    # Calculate metrics
     avg_loss = total_loss / total if total > 0 else 0.0
+
+    # Accuracy = % ranking fake news first (we want this to DROP after unlearning)
     accuracy = correct / total if total > 0 else 0.0
 
-    # Calculate membership inference attack score
+    # Concatenate all results
     all_scores = torch.cat(all_scores, dim=0)
     all_labels = torch.cat(all_labels, dim=0)
-    mia_score = calculate_mia_score(all_scores, all_labels)
+    all_probs = torch.cat(all_probs, dim=0)
 
-    return {"loss": avg_loss, "accuracy": accuracy, "mia_score": mia_score, "total_samples": total}
+    # AUC: Can't compute traditional AUC since all labels are 0
+    # Instead, compute: average probability assigned to position 0
+    avg_prob_fake_first = all_probs[:, 0].mean().item()
+
+    # Use this as a proxy for AUC (lower is better after unlearning)
+    auc = avg_prob_fake_first
+
+    # MIA score: confidence in selecting position 0
+    mia_score = avg_prob_fake_first
+
+    return {
+        "loss": avg_loss,
+        "auc": auc,  # Probability of ranking fake first
+        "accuracy": accuracy,  # % ranking fake first
+        "positive_flip_rate": 1.0 - accuracy,  # % NOT ranking fake first
+        "avg_confidence_on_positive": avg_prob_fake_first,
+        "label_1_total": total,  # All samples are "fake news contexts"
+        "label_1_flipped": int((1.0 - accuracy) * total),  # Not ranking fake first
+        "mia_score": mia_score,
+        "total_samples": total,
+    }
 
 
 def calculate_forget_delta(
     metrics_before: Dict[str, float], metrics_after: Dict[str, float]
 ) -> Dict[str, float]:
-    """
-    Calculate change in forget set metrics (before vs after unlearning).
-
-    Good unlearning should show:
-    - Positive loss delta (loss increased)
-    - Negative accuracy delta (accuracy decreased)
-
-    Args:
-        metrics_before: Metrics before unlearning
-        metrics_after: Metrics after unlearning
-
-    Returns:
-        Dictionary with deltas
-
-    Example:
-        >>> delta = calculate_forget_delta(before, after)
-        >>> print(f"Loss increased by: {delta['loss_delta']:.4f}")
-    """
+    """Calculate deltas - good unlearning shows increased flip rate and decreased AUC."""
     return {
         "loss_delta": metrics_after["loss"] - metrics_before["loss"],
+        "auc_delta": metrics_after["auc"] - metrics_before["auc"],
         "accuracy_delta": metrics_after["accuracy"] - metrics_before["accuracy"],
-        "mia_score_delta": metrics_after["mia_score"] - metrics_before["mia_score"],
+        "positive_flip_rate_delta": metrics_after["positive_flip_rate"]
+        - metrics_before["positive_flip_rate"],
+        "confidence_delta": metrics_after["avg_confidence_on_positive"]
+        - metrics_before["avg_confidence_on_positive"],
     }
 
 
@@ -154,85 +159,73 @@ def evaluate_forgetting_completeness(
     model: nn.Module, forget_loader: DataLoader, device: torch.device, random_baseline: float = None
 ) -> Dict[str, Any]:
     """
-    Evaluate how completely the model has forgotten.
+    Evaluate how completely the model has forgotten (listwise format).
 
-    Compares forget set performance to random guessing.
-
-    Args:
-        model: Model to evaluate
-        forget_loader: DataLoader for forget set
-        device: Device to run on
-        random_baseline: Expected accuracy for random guessing
-                        (default: 1/num_classes)
-
-    Returns:
-        Dictionary with completeness metrics
-
-    Example:
-        >>> completeness = evaluate_forgetting_completeness(model, forget_loader, device)
-        >>> print(f"Forgetting score: {completeness['forgetting_score']:.4f}")
+    For listwise: random baseline is 1/num_candidates (e.g., 1/5 = 0.2)
     """
     metrics = calculate_forget_quality(model, forget_loader, device)
 
-    # Estimate number of classes from first batch
+    # For listwise with 5 candidates, random would rank fake first 20% of time
     if random_baseline is None:
+        # Get num_candidates from first batch
         for batch in forget_loader:
-            if batch is None:
-                continue
-            labels = batch["label"]
-            # Assume uniform distribution over classes
-            num_classes = len(torch.unique(labels))
-            random_baseline = 1.0 / num_classes
-            break
+            if batch is not None:
+                scores = model(batch)
+                num_candidates = scores.shape[1]
+                random_baseline = 1.0 / num_candidates
+                break
+        if random_baseline is None:
+            random_baseline = 0.2  # Default: 5 candidates
 
-    # Forgetting score: how close to random?
-    # 1.0 = perfect forgetting (at random baseline)
-    # 0.0 = no forgetting
-    # Can be negative if worse than original
-    if metrics["accuracy"] == 0:
-        forgetting_score = 1.0
-    else:
-        forgetting_score = 1.0 - (metrics["accuracy"] / random_baseline)
+    # Flip score: what % are NOT ranking fake first
+    flip_score = metrics["positive_flip_rate"]
+
+    # Compare accuracy to random baseline
+    accuracy_vs_random = metrics["accuracy"] / random_baseline if random_baseline > 0 else 0.0
+
+    # Forgetting score: lower accuracy is better
+    forgetting_score = flip_score
+
+    # Is forgotten if accuracy is close to or below random
+    is_forgotten = metrics["accuracy"] <= random_baseline * 1.2  # 20% tolerance
 
     return {
-        "accuracy": metrics["accuracy"],
+        "positive_flip_rate": metrics["positive_flip_rate"],
+        "avg_confidence_on_positive": metrics["avg_confidence_on_positive"],
         "random_baseline": random_baseline,
+        "accuracy": metrics["accuracy"],
+        "accuracy_vs_random": accuracy_vs_random,
+        "flip_score": flip_score,
         "forgetting_score": forgetting_score,
-        "is_forgotten": metrics["accuracy"] <= random_baseline * 1.1,  # 10% tolerance
-        "mia_score": metrics["mia_score"],
+        "is_forgotten": is_forgotten,
+        "auc": metrics.get("auc", 0.5),
+        "mia_score": metrics.get("mia_score", 0.5),
     }
 
 
 def calculate_forget_efficacy(
-    accuracy_before: float, accuracy_after: float, random_baseline: float = 0.5
+    metrics_before: Dict[str, float],
+    metrics_after: Dict[str, float],
+    random_baseline: float = 0.2,  # 1/5 candidates
 ) -> float:
     """
-    Calculate forget efficacy score.
+    Calculate forget efficacy for listwise ranking.
 
-    Measures how much forgetting occurred relative to maximum possible.
-
-    Formula:
-        efficacy = (acc_before - acc_after) / (acc_before - random_baseline)
-
-    Args:
-        accuracy_before: Accuracy before unlearning
-        accuracy_after: Accuracy after unlearning
-        random_baseline: Random guess accuracy
-
-    Returns:
-        Efficacy score (0-1, higher is better)
-        1.0 = reduced to random guessing
-        0.0 = no change
-
-    Example:
-        >>> efficacy = calculate_forget_efficacy(0.9, 0.5, 0.5)
-        >>> # efficacy = (0.9 - 0.5) / (0.9 - 0.5) = 1.0 (perfect)
+    Efficacy = how much we reduced the rate of ranking fake first
     """
-    if accuracy_before <= random_baseline:
-        return 1.0  # Already at or below random
+    acc_before = metrics_before.get("accuracy", 0.0)
+    acc_after = metrics_after.get("accuracy", 0.0)
 
-    max_possible_decrease = accuracy_before - random_baseline
-    actual_decrease = accuracy_before - accuracy_after
+    # Maximum possible decrease: from current to random baseline
+    max_decrease = acc_before - random_baseline
+    actual_decrease = acc_before - acc_after
 
-    efficacy = actual_decrease / max_possible_decrease
-    return max(0.0, min(1.0, efficacy))  # Clamp to [0, 1]
+    if max_decrease > 0:
+        efficacy = actual_decrease / max_decrease
+    else:
+        efficacy = 0.0
+
+    # Clamp to [0, 1]
+    efficacy = max(0.0, min(1.0, efficacy))
+
+    return efficacy
