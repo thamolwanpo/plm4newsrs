@@ -70,7 +70,7 @@ unlearn-ratio:
 		--mode ratio \
 		--splits-dir data/politifact/unlearning_splits/ratio_0_05 \
 		--trial-idx 0 \
-		--learning-rate 0.0005 \
+		--learning-rate 0.001 \
 		--num-steps 3 
 
 # Ratio mode: single ratio, multiple trials
