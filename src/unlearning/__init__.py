@@ -8,6 +8,12 @@ from .methods import (
     print_method_info,
 )
 from .data import ForgetSet, create_ratio_split, create_multiple_ratios
+from .evaluator import UnlearningEvaluator
+from .metrics import (
+    calculate_forget_quality,
+    calculate_retain_quality,
+    UnlearningTimer,
+)
 
 __all__ = [
     # Base classes
@@ -22,4 +28,9 @@ __all__ = [
     "ForgetSet",
     "create_ratio_split",
     "create_multiple_ratios",
+    # Evaluation
+    "UnlearningEvaluator",
+    "calculate_forget_quality",
+    "calculate_retain_quality",
+    "UnlearningTimer",
 ]
