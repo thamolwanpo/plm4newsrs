@@ -1,63 +1,95 @@
-"""Configuration for first-order gradient-based unlearning."""
+# configs/unlearning/methods/first_order_config.py
 
 from dataclasses import dataclass
-from typing import Dict, Any
-from ..base_unlearning import BaseUnlearningConfig
+from configs.unlearning.base_unlearning import UnlearningConfig
 
 
 @dataclass
-class FirstOrderConfig(BaseUnlearningConfig):
+class FirstOrderConfig(UnlearningConfig):
     """
-    Configuration for first-order gradient-based unlearning.
+    Configuration for first-order machine unlearning.
 
-    Single-step update using gradient difference:
-    θ_new = θ* - τ · (∇ℓ(Z̃, θ*) - ∇ℓ(Z, θ*))
+    Based on "Machine Unlearning of Features and Labels" approach.
 
-    Where:
-    - θ*: current model parameters
-    - Z: forget set
-    - Z̃: retain set
-    - τ: unlearning rate (step size)
+    Algorithm uses first-order approximation of influence functions:
+    θ_new = θ* - α · (∇ℓ(Z_forget, θ*) - ∇ℓ(Z_retain, θ*))
+
+    Parameters:
+    - learning_rate (α): Step size for parameter update
+    - num_steps: Number of unlearning iterations
+    - damping: Regularization factor for numerical stability
+
+    Typical values:
+    - learning_rate: 0.0001 - 0.001 (smaller for large models)
+    - num_steps: 1-10 (often 1-3 is sufficient)
+    - damping: 0.001 - 0.1
+
+    Example:
+        >>> config = FirstOrderConfig(
+        ...     method="first_order",
+        ...     learning_rate=0.0005,
+        ...     num_steps=3,
+        ...     damping=0.01
+        ... )
     """
 
-    # Override method name
+    # Method identifier
     method: str = "first_order"
 
-    # ============================================
-    # FIRST-ORDER UNLEARNING PARAMETERS
-    # ============================================
+    # Learning rate (α) - step size for unlearning update
+    learning_rate: float = 0.0005
 
-    # Unlearning rate (tau/τ in the equation)
-    # Controls the step size of the parameter update
-    unlearning_rate: float = 2e-5
+    # Number of unlearning steps
+    # 1 = single-shot unlearning
+    # >1 = iterative application for stronger effect
+    num_steps: int = 1
 
-    # Batch size for gradient computation
-    # Larger batches = more stable gradients but more memory
-    batch_size: int = 16
+    # Damping factor for numerical stability
+    # Prevents very large updates
+    damping: float = 0.01
 
-    # Gradient clipping for stability
-    gradient_clip_val: float = 1.0
+    def __post_init__(self):
+        """Validate configuration."""
+        super().__post_init__()
 
-    def get_method_params(self) -> Dict[str, Any]:
-        """Get first-order unlearning parameters."""
-        base_params = super().get_method_params()
+        if self.learning_rate <= 0:
+            raise ValueError("learning_rate must be positive")
 
-        first_order_params = {
-            "unlearning_rate": self.unlearning_rate,
-            "batch_size": self.batch_size,
-            "gradient_clip_val": self.gradient_clip_val,
-        }
+        if self.num_steps <= 0:
+            raise ValueError("num_steps must be positive")
 
-        return {**base_params, **first_order_params}
+        if self.damping < 0:
+            raise ValueError("damping must be non-negative")
+
+        # Warnings for potentially problematic values
+        if self.learning_rate > 0.01:
+            print(f"⚠️  Warning: learning_rate={self.learning_rate} is quite large")
+            print(f"   Consider using smaller values (0.0001-0.001) for stability")
+
+        if self.num_steps > 10:
+            print(f"⚠️  Warning: num_steps={self.num_steps} is quite large")
+            print(f"   Typically 1-5 steps are sufficient")
 
     def print_config(self):
-        """Print configuration with first-order specific details."""
-        super().print_config()
-
-        print("\nFirst-Order Unlearning Parameters:")
-        print(f"  Unlearning rate (τ): {self.unlearning_rate}")
-        print(f"  Batch size: {self.batch_size}")
-        print(f"  Gradient clip: {self.gradient_clip_val}")
-        print("\nUpdate equation:")
-        print("  θ_new = θ* - τ · (∇ℓ(Z̃, θ*) - ∇ℓ(Z, θ*))")
-        print("=" * 70)
+        """Print configuration summary."""
+        print(f"\n{'='*70}")
+        print("FIRST-ORDER UNLEARNING CONFIG")
+        print(f"{'='*70}")
+        print(f"Algorithm: Machine Unlearning of Features and Labels")
+        print(f"Method: {self.method}")
+        print(f"\nFormula:")
+        print(f"  θ_new = θ* - α · (∇ℓ_forget - ∇ℓ_retain)")
+        print(f"\nParameters:")
+        print(f"  Learning rate (α): {self.learning_rate}")
+        print(f"  Number of steps: {self.num_steps}")
+        print(f"  Damping: {self.damping}")
+        print(f"\nData:")
+        print(f"  Mode: {self.mode}")
+        if self.mode == "manual":
+            print(f"  Forget set: {self.forget_set_path}")
+            print(f"  Retain set: {self.retain_set_path}")
+        else:
+            print(f"  Splits dir: {self.unlearning_splits_dir}")
+            print(f"  Ratio: {self.ratio}")
+            print(f"  Trial: {self.trial_idx}")
+        print(f"{'='*70}\n")
