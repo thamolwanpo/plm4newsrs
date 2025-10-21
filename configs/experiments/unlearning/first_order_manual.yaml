@@ -1,0 +1,54 @@
+# ============================================
+# FIRST-ORDER GRADIENT UNLEARNING (MANUAL MODE)
+# ============================================
+# USE CASE: Test time / Production
+# Single-step update: θ_new = θ* - τ · (∇ℓ(Z̃, θ*) - ∇ℓ(Z, θ*))
+# ============================================
+
+# Method
+method: "first_order"
+
+# Data mode: MANUAL (default for test time)
+mode: "manual"
+
+# Manual mode: User provides explicit paths
+forget_set_path: null  # REQUIRED: Path to forget set CSV
+retain_set_path: null  # REQUIRED: Path to retain set CSV
+
+# ============================================
+# UNLEARNING PARAMETERS
+# ============================================
+# Unlearning rate (tau/τ) - controls step size
+unlearning_rate: 2.0e-5
+
+# Batch size for gradient computation
+batch_size: 16
+
+# Gradient clipping for stability
+gradient_clip_val: 1.0
+
+# ============================================
+# EVALUATION
+# ============================================
+evaluate_forget_quality: true   # Measure forgetting effectiveness
+evaluate_utility: true          # Measure utility preservation
+evaluate_efficiency: true       # Track time and parameter changes
+
+benchmark_filter: null  # null = evaluate on all benchmarks
+
+# ============================================
+# OUTPUT
+# ============================================
+save_unlearned_model: true
+output_dir: null  # Auto-generated
+
+# ============================================
+# COMPARISON & CACHING
+# ============================================
+compare_with_original: true
+cache_original_predictions: true
+
+# ============================================
+# REPRODUCIBILITY
+# ============================================
+seed: 42

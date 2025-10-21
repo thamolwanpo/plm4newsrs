@@ -1,0 +1,49 @@
+# ============================================
+# FIRST-ORDER GRADIENT UNLEARNING (RATIO MODE)
+# ============================================
+# USE CASE: Development / Multi-ratio & multi-trial experiments
+# Single-step update: θ_new = θ* - τ · (∇ℓ(Z̃, θ*) - ∇ℓ(Z, θ*))
+# ============================================
+
+# Method
+method: "first_order"
+
+# Data mode: RATIO (for experiments)
+mode: "ratio"
+
+# Ratio mode: Directory containing pre-generated splits
+unlearning_splits_dir: null  # REQUIRED: e.g., data/politifact/unlearning_splits/ratio_0.05
+ratio: 0.05
+trial_idx: 0
+
+# ============================================
+# UNLEARNING PARAMETERS
+# ============================================
+unlearning_rate: 2.0e-5
+batch_size: 16
+gradient_clip_val: 1.0
+
+# ============================================
+# EVALUATION
+# ============================================
+evaluate_forget_quality: true
+evaluate_utility: true
+evaluate_efficiency: true
+benchmark_filter: null
+
+# ============================================
+# OUTPUT
+# ============================================
+save_unlearned_model: true
+output_dir: null  # Auto-generated: ratio_{ratio}/trial_{trial_idx}/
+
+# ============================================
+# COMPARISON & CACHING
+# ============================================
+compare_with_original: true
+cache_original_predictions: true
+
+# ============================================
+# REPRODUCIBILITY
+# ============================================
+seed: 42
