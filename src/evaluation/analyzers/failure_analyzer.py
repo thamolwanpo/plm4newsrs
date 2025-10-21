@@ -124,9 +124,10 @@ class FailureAnalyzer(BaseAnalyzer):
             if positive_items.empty:
                 continue
 
-            # Get highest scores
+            # Get highest positive score
             max_positive_score = positive_items["score"].max()
             max_positive_idx = positive_items["score"].idxmax()
+            top_correct_item = positive_items.loc[max_positive_idx]  # ← MOVE THIS UP
 
             if not negative_items.empty:
                 max_negative_score = negative_items["score"].max()
@@ -138,7 +139,6 @@ class FailureAnalyzer(BaseAnalyzer):
 
                     # Get the top wrong item details
                     top_wrong_item = negative_items.loc[max_negative_idx]
-                    top_correct_item = positive_items.loc[max_positive_idx]
 
                     # Check if fake news was involved
                     is_fake_involved = bool(top_wrong_item["is_fake"])
@@ -178,6 +178,22 @@ class FailureAnalyzer(BaseAnalyzer):
                             "num_negatives": len(negative_items),
                         }
                     )
+            else:
+                # No negative items - can't have failure, but record it
+                failure_rows.append(
+                    {
+                        "user_id": user_id,
+                        "failure": False,
+                        "max_positive_score": max_positive_score,
+                        "max_negative_score": None,  # ← No negatives
+                        "margin": None,
+                        "top_wrong_is_fake": False,
+                        "top_wrong_news_id": None,
+                        "top_correct_news_id": top_correct_item["news_id"],
+                        "num_positives": len(positive_items),
+                        "num_negatives": 0,
+                    }
+                )
 
         # Overall statistics
         failure_rate = safe_divide(total_failures, total_interactions, default=0.0) * 100

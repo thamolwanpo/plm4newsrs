@@ -5,11 +5,11 @@ import torch
 from torch.utils.data import Dataset
 from typing import Dict
 from tqdm import tqdm
-from configs.models.base_config import BaseConfig
+from configs.models.simple_config import ModelConfig
 
 
 def convert_pairwise_to_listwise_eval(
-    df_pairwise: pd.DataFrame, config: BaseConfig
+    df_pairwise: pd.DataFrame, config: ModelConfig
 ) -> pd.DataFrame:
     """Convert pairwise format to listwise for evaluation."""
     listwise_rows = []
