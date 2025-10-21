@@ -20,16 +20,13 @@ class FirstOrderUnlearning(BaseUnlearningMethod):
     The algorithm approximates the optimal parameters after removing a subset
     of training data (forget set) without full retraining.
 
-    Key Formula:
-    θ_new = θ* - τ · H^(-1) · (∇ℓ(Z̃_forget, θ*) - ∇ℓ(Z_all, θ*) · |Z̃|/|Z|)
-
     First-order approximation (without Hessian inverse):
-    θ_new = θ* - τ · (∇ℓ(Z̃_forget, θ*) - ∇ℓ(Z_retain, θ*))
+    θ_new = θ* - τ · (∇ℓ(Z̃_retain, θ*) - ∇ℓ(Z_forget, θ*))
 
     Where:
     - θ*: Current model parameters (trained on all data including forget set)
-    - Z̃_forget: Forget set (data to unlearn)
-    - Z_retain: Retain set (data to keep)
+    - Z̃_retain: Retain set (data to keep)
+    - Z_forget: Forget set (data to unlearn)
     - τ: Step size (learning rate)
     - ∇ℓ: Gradient of loss
 
