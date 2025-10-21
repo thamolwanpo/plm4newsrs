@@ -289,41 +289,37 @@ class FirstOrderUnlearning(BaseUnlearningMethod):
         """
         Compute average gradient over entire dataset.
         Only computes gradients for trainable parameters (requires_grad=True).
-
-        This computes: (1/|Z|) · Σ ∇ℓ(z_i, θ)
-
-        Args:
-            dataloader: DataLoader to compute gradients on
-
-        Returns:
-            Dictionary mapping parameter names to average gradients
-            (only includes trainable parameters)
         """
         self.model.train()
         self.model.zero_grad()
 
         # Accumulate gradients (only for trainable params)
         accumulated_grads = {}
-        num_batches = 0  # Count batches, not samples
+        num_samples = 0
 
         for batch in dataloader:
             if batch is None:
                 continue
 
-            # Move to device
-            if "device_indicator" in batch:
-                batch["device_indicator"] = batch["device_indicator"].to(self.device)
+            # Move ALL tensors in batch to device
+            batch_tensors = {}
+            for k, v in batch.items():
+                if isinstance(v, torch.Tensor):
+                    batch_tensors[k] = v.to(self.device)
+                else:
+                    batch_tensors[k] = v
 
-            labels = batch["label"].to(self.device)
+            labels = batch_tensors["label"]
+            batch_size = labels.size(0)
 
             # Forward pass
-            scores = self.model(batch)
+            scores = self.model(batch_tensors)
             loss = self.criterion(scores, labels)
 
             # Backward pass
             loss.backward()
 
-            # Accumulate gradients (already averaged within batch by CrossEntropyLoss)
+            # Accumulate gradients (weighted by batch size)
             # ONLY for trainable parameters
             for name, param in self.model.named_parameters():
                 if not param.requires_grad:
@@ -331,19 +327,19 @@ class FirstOrderUnlearning(BaseUnlearningMethod):
 
                 if param.grad is not None:
                     if name not in accumulated_grads:
-                        accumulated_grads[name] = param.grad.clone()
+                        accumulated_grads[name] = param.grad.clone() * batch_size
                     else:
-                        accumulated_grads[name] += param.grad.clone()
+                        accumulated_grads[name] += param.grad.clone() * batch_size
 
-            num_batches += 1
+            num_samples += batch_size
 
             # Zero gradients for next iteration
             self.model.zero_grad()
 
-        # Compute average over batches
+        # Compute average
         avg_grads = {}
         for name, grad_sum in accumulated_grads.items():
-            avg_grads[name] = grad_sum / num_batches
+            avg_grads[name] = grad_sum / num_samples
 
         # Count trainable vs frozen
         trainable_count = len(avg_grads)
@@ -362,7 +358,7 @@ class FirstOrderUnlearning(BaseUnlearningMethod):
         return {
             "method": "first_order",
             "algorithm": "Machine Unlearning of Features and Labels",
-            "formula": "θ_new = θ* - α · (∇ℓ_forget - ∇ℓ_retain)",
+            "formula": "θ_new = θ* - α · (∇ℓ_retain - ∇ℓ_forget)",
             "learning_rate": self.learning_rate,
             "num_steps": self.num_steps,
             "damping": self.damping,
