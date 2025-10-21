@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any
 from tqdm import tqdm
 
-from configs import BaseConfig
+from configs import ModelConfig
 from src.models.simple import LitRecommender
 from src.utils.seed import set_seed
 
@@ -34,7 +34,7 @@ class ModelEvaluator:
 
     def __init__(
         self,
-        config: BaseConfig,
+        config: ModelConfig,
         device: Optional[torch.device] = None,
         enable_analyses: Optional[List[str]] = None,
     ):

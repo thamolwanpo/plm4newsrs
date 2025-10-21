@@ -25,13 +25,6 @@ def calculate_forget_quality(
 ) -> Dict[str, float]:
     """
     Calculate forget quality for NEWS RECOMMENDATION (listwise format).
-
-    In listwise format:
-    - batch["label"] is position index (always 0 = first positive)
-    - Actual news labels are NOT directly available in batch
-    - We measure: Is model ranking the positive (fake) item first?
-
-    For unlearning: We want accuracy to DROP (stop ranking fake news first)
     """
     if criterion is None:
         criterion = nn.CrossEntropyLoss()
@@ -51,11 +44,16 @@ def calculate_forget_quality(
             if batch is None:
                 continue
 
-            if "device_indicator" in batch:
-                batch["device_indicator"] = batch["device_indicator"].to(device)
+            # Move ALL tensors in batch to device
+            batch_tensors = {}
+            for k, v in batch.items():
+                if isinstance(v, torch.Tensor):
+                    batch_tensors[k] = v.to(device)
+                else:
+                    batch_tensors[k] = v
 
-            labels = batch["label"].to(device)  # Position indices (always 0)
-            scores = model(batch)  # (batch, num_candidates)
+            labels = batch_tensors["label"]
+            scores = model(batch_tensors)  # Use moved batch
             loss = criterion(scores, labels)
 
             total_loss += loss.item() * labels.size(0)
@@ -144,10 +142,15 @@ def calculate_mia_score(scores: torch.Tensor, labels: torch.Tensor) -> float:
         >>> mia = calculate_mia_score(scores, labels)
         >>> # After good unlearning, MIA should be close to 1/num_classes
     """
+    # Ensure same device
+    if scores.device != labels.device:
+        labels = labels.to(scores.device)
+
+    # Convert scores to probabilities
     probs = torch.softmax(scores, dim=1)
 
     # Get probability of correct class for each sample
-    correct_probs = probs[torch.arange(len(labels)), labels]
+    correct_probs = probs[torch.arange(len(labels), device=scores.device), labels]
 
     # Average confidence
     mia_score = correct_probs.mean().item()
@@ -170,7 +173,15 @@ def evaluate_forgetting_completeness(
         # Get num_candidates from first batch
         for batch in forget_loader:
             if batch is not None:
-                scores = model(batch)
+                # Move tensors to device to get scores
+                batch_tensors = {}
+                for k, v in batch.items():
+                    if isinstance(v, torch.Tensor):
+                        batch_tensors[k] = v.to(device)
+                    else:
+                        batch_tensors[k] = v
+
+                scores = model(batch_tensors)
                 num_candidates = scores.shape[1]
                 random_baseline = 1.0 / num_candidates
                 break

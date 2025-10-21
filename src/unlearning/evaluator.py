@@ -210,8 +210,6 @@ class UnlearningEvaluator:
     ) -> Tuple[Dict[str, float], Dict[int, int]]:
         """
         Calculate forget quality for NEWS RECOMMENDATION.
-
-        Returns predictions as POSITIONS (0 = ranked fake news first, >0 = ranked real news first)
         """
         from src.unlearning.metrics.forget_quality import calculate_forget_quality
 
@@ -228,11 +226,16 @@ class UnlearningEvaluator:
                 if batch is None:
                     continue
 
-                if "device_indicator" in batch:
-                    batch["device_indicator"] = batch["device_indicator"].to(self.device)
+                # Move ALL tensors in batch to device
+                batch_tensors = {}
+                for k, v in batch.items():
+                    if isinstance(v, torch.Tensor):
+                        batch_tensors[k] = v.to(self.device)
+                    else:
+                        batch_tensors[k] = v
 
                 # Get scores for all candidates
-                scores = model(batch)  # (batch_size, num_candidates)
+                scores = model(batch_tensors)  # (batch_size, num_candidates)
 
                 # Predictions are which position was ranked highest
                 preds = torch.argmax(scores, dim=1)  # (batch_size,)

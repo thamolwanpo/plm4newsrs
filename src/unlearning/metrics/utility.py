@@ -24,21 +24,6 @@ def calculate_retain_quality(
 ) -> Dict[str, float]:
     """
     Calculate metrics on retain set.
-
-    Measures how well the model maintains performance on data we want to keep.
-
-    Args:
-        model: Model to evaluate
-        retain_loader: DataLoader for retain set
-        device: Device to run on
-        criterion: Loss function
-
-    Returns:
-        Dictionary with retain metrics
-
-    Example:
-        >>> metrics = calculate_retain_quality(model, retain_loader, device)
-        >>> print(f"Retain accuracy: {metrics['accuracy']:.4f}")
     """
     if criterion is None:
         criterion = nn.CrossEntropyLoss()
@@ -54,12 +39,17 @@ def calculate_retain_quality(
             if batch is None:
                 continue
 
-            if "device_indicator" in batch:
-                batch["device_indicator"] = batch["device_indicator"].to(device)
+            # Move ALL tensors in batch to device
+            batch_tensors = {}
+            for k, v in batch.items():
+                if isinstance(v, torch.Tensor):
+                    batch_tensors[k] = v.to(device)
+                else:
+                    batch_tensors[k] = v
 
-            labels = batch["label"].to(device)
+            labels = batch_tensors["label"]
 
-            scores = model(batch)
+            scores = model(batch_tensors)
             loss = criterion(scores, labels)
 
             total_loss += loss.item() * labels.size(0)

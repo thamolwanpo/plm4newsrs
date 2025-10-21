@@ -56,7 +56,7 @@ def convert_pairwise_to_listwise_eval(
 class BenchmarkDataset(Dataset):
     """Dataset for benchmark evaluation."""
 
-    def __init__(self, csv_path: Path, tokenizer, config: BaseConfig):
+    def __init__(self, csv_path: Path, tokenizer, config: ModelConfig):
         """
         Args:
             csv_path: Path to benchmark CSV file
