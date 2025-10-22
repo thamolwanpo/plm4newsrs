@@ -16,12 +16,16 @@ unlearning_splits_dir: null  # REQUIRED: e.g., data/politifact/unlearning_splits
 ratio: 0.05
 trial_idx: 0
 
+# Removal strategy for creating splits
+# Options: "complete", "positive_only", "fake_positive_history"
+removal_strategy: "fake_positive_history"  # Remove fake-positive contexts and related negatives
+
 # ============================================
 # UNLEARNING PARAMETERS
 # ============================================
-unlearning_rate: 5.0e-5
-batch_size: 16
-gradient_clip_val: 1.0
+learning_rate: 5.0e-5
+num_steps: 3
+damping: 0.01
 
 # ============================================
 # EVALUATION

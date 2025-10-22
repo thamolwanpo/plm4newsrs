@@ -133,7 +133,9 @@ def unlearn_model(
     print(f"{'='*70}")
     print("STEP 2/6: LOAD FORGET/RETAIN SETS")
     print(f"{'='*70}")
-    forget_set, forget_loader, retain_loader = _load_data(unlearn_config, model_config, device)
+    forget_set, forget_loader, retain_loader, corrected_loader = _load_data(
+        unlearn_config, model_config, device
+    )
     forget_set.print_summary()
     print(f"✅ Data loaded successfully\n")
 
@@ -155,11 +157,21 @@ def unlearn_model(
     print("STEP 4/6: EXECUTE UNLEARNING")
     print(f"{'='*70}")
     with UnlearningTimer() as timer:
-        unlearned_model = unlearning_method.unlearn(
-            forget_loader=forget_loader,
-            retain_loader=retain_loader,
-            validation_loader=None,  # Can add validation if needed
-        )
+        if corrected_loader is not None:
+            print("Using label correction mode (paper's formula)\n")
+            unlearned_model = unlearning_method.unlearn(
+                forget_loader=forget_loader,
+                retain_loader=retain_loader,
+                validation_loader=retain_loader,
+                corrected_loader=corrected_loader,
+            )
+        else:
+            print("Using data removal mode (heuristic)\n")
+            unlearned_model = unlearning_method.unlearn(
+                forget_loader=forget_loader,
+                retain_loader=retain_loader,
+                validation_loader=retain_loader,
+            )
 
     unlearning_time = timer.get_elapsed()
     print(f"✅ Unlearning complete in {unlearning_time:.2f}s ({unlearning_time/60:.2f}m)\n")
@@ -270,23 +282,16 @@ def _load_model(
 
 def _load_data(
     unlearn_config: BaseUnlearningConfig, model_config: BaseConfig, device: torch.device
-) -> Tuple[ForgetSet, DataLoader, DataLoader]:
-    """
-    Load forget and retain sets based on unlearning config.
-
-    Args:
-        unlearn_config: Unlearning configuration
-        model_config: Model configuration
-        device: Device to use
-
-    Returns:
-        Tuple of (forget_set, forget_loader, retain_loader)
-    """
-    # Load ForgetSet based on mode
+) -> Tuple:
     if unlearn_config.mode == "manual":
         print(f"Loading data in MANUAL mode")
+
+        corrected_path = getattr(unlearn_config, "corrected_set_path", None)
+
         forget_set = ForgetSet.from_manual(
-            forget_path=unlearn_config.forget_set_path, retain_path=unlearn_config.retain_set_path
+            forget_path=unlearn_config.forget_set_path,
+            retain_path=unlearn_config.retain_set_path,
+            corrected_path=corrected_path,
         )
 
     elif unlearn_config.mode == "ratio":
@@ -298,7 +303,84 @@ def _load_data(
     else:
         raise ValueError(f"Unknown mode: {unlearn_config.mode}")
 
-    # Create temporary CSV files for datasets
+    unlearn_config.label_correction_mode = forget_set.is_label_correction()
+
+    if forget_set.is_label_correction():
+        print(f"\n🔄 AUTO-DETECTED: Label Correction Mode")
+        forget_loader, corrected_loader, retain_loader = _create_dataloaders_label_correction(
+            forget_set, model_config
+        )
+        return forget_set, forget_loader, retain_loader, corrected_loader
+    else:
+        print(f"\n🔄 AUTO-DETECTED: Data Removal Mode")
+        forget_loader, retain_loader = _create_dataloaders(forget_set, model_config)
+        return forget_set, forget_loader, retain_loader, None
+
+
+def _create_dataloaders_label_correction(
+    forget_set: ForgetSet, model_config: BaseConfig
+) -> Tuple[DataLoader, DataLoader, DataLoader]:
+    import pandas as pd
+
+    temp_dir = Path("./temp_unlearning_data")
+    temp_dir.mkdir(exist_ok=True)
+
+    forget_temp_path = temp_dir / "forget_temp.csv"
+    corrected_temp_path = temp_dir / "corrected_temp.csv"
+    retain_temp_path = temp_dir / "retain_temp.csv"
+
+    forget_set.forget_df.to_csv(forget_temp_path, index=False)
+    forget_set.corrected_df.to_csv(corrected_temp_path, index=False)
+    forget_set.retain_df.to_csv(retain_temp_path, index=False)
+
+    use_glove = "glove" in model_config.model_name.lower()
+    tokenizer = None if use_glove else AutoTokenizer.from_pretrained(model_config.model_name)
+
+    forget_dataset = NewsDataset(forget_temp_path, model_config, tokenizer)
+    corrected_dataset = NewsDataset(corrected_temp_path, model_config, tokenizer)
+    retain_dataset = NewsDataset(retain_temp_path, model_config, tokenizer)
+
+    forget_loader = DataLoader(
+        forget_dataset,
+        batch_size=model_config.train_batch_size,
+        shuffle=True,
+        collate_fn=collate_fn,
+        num_workers=2,
+        pin_memory=True,
+    )
+
+    corrected_loader = DataLoader(
+        corrected_dataset,
+        batch_size=model_config.train_batch_size,
+        shuffle=True,
+        collate_fn=collate_fn,
+        num_workers=2,
+        pin_memory=True,
+    )
+
+    retain_loader = DataLoader(
+        retain_dataset,
+        batch_size=model_config.train_batch_size,
+        shuffle=True,
+        collate_fn=collate_fn,
+        num_workers=2,
+        pin_memory=True,
+    )
+
+    print(f"Created loaders:")
+    print(f"  Z (wrong labels): {len(forget_loader)} batches")
+    print(f"  Z̃ (correct labels): {len(corrected_loader)} batches")
+    print(f"  Retain: {len(retain_loader)} batches")
+
+    return forget_loader, corrected_loader, retain_loader
+
+
+def _create_dataloaders(
+    forget_set: ForgetSet, model_config: BaseConfig
+) -> Tuple[DataLoader, DataLoader]:
+    """Create dataloaders for data removal mode (TWO loaders)."""
+    import pandas as pd
+
     temp_dir = Path("./temp_unlearning_data")
     temp_dir.mkdir(exist_ok=True)
 
@@ -308,18 +390,12 @@ def _load_data(
     forget_set.forget_df.to_csv(forget_temp_path, index=False)
     forget_set.retain_df.to_csv(retain_temp_path, index=False)
 
-    # Load tokenizer if needed
     use_glove = "glove" in model_config.model_name.lower()
-    if use_glove:
-        tokenizer = None
-    else:
-        tokenizer = AutoTokenizer.from_pretrained(model_config.model_name)
+    tokenizer = None if use_glove else AutoTokenizer.from_pretrained(model_config.model_name)
 
-    # Create datasets
     forget_dataset = NewsDataset(forget_temp_path, model_config, tokenizer)
     retain_dataset = NewsDataset(retain_temp_path, model_config, tokenizer)
 
-    # Create dataloaders
     forget_loader = DataLoader(
         forget_dataset,
         batch_size=model_config.train_batch_size,
@@ -341,7 +417,7 @@ def _load_data(
     print(f"Forget loader: {len(forget_loader)} batches")
     print(f"Retain loader: {len(retain_loader)} batches")
 
-    return forget_set, forget_loader, retain_loader
+    return forget_loader, retain_loader
 
 
 def _save_unlearned_model(
