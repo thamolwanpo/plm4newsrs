@@ -210,13 +210,14 @@ class UnlearningEvaluator:
     ) -> Tuple[Dict[str, float], Dict[int, int]]:
         """
         Calculate forget quality for NEWS RECOMMENDATION.
+        Returns metrics and LABEL predictions (0 or 1), not positions.
         """
         from src.unlearning.metrics.forget_quality import calculate_forget_quality
 
         # Get standard metrics
         metrics = calculate_forget_quality(model, forget_loader, self.device, self.criterion)
 
-        # Collect predictions (positions)
+        # Collect LABEL predictions (not positions)
         model.eval()
         predictions = {}
         sample_idx = 0
@@ -237,12 +238,17 @@ class UnlearningEvaluator:
                 # Get scores for all candidates
                 scores = model(batch_tensors)  # (batch_size, num_candidates)
 
-                # Predictions are which position was ranked highest
-                preds = torch.argmax(scores, dim=1)  # (batch_size,)
+                # Get predicted position (which candidate ranked highest)
+                preds_position = torch.argmax(scores, dim=1)  # (batch_size,)
 
-                # Store predictions (positions)
-                for pred in preds:
-                    predictions[sample_idx] = pred.item()
+                # Convert position to LABEL prediction:
+                # Position 0 = clicked on first candidate (fake news) → label=1
+                # Position > 0 = clicked on other candidate (real news) → label=0
+                preds_label = (preds_position == 0).long()  # 1 if pos=0, else 0
+
+                # Store LABEL predictions
+                for pred in preds_label:
+                    predictions[sample_idx] = pred.item()  # 0 or 1
                     sample_idx += 1
 
         return metrics, predictions
@@ -254,22 +260,19 @@ class UnlearningEvaluator:
         forget_loader: DataLoader,
     ) -> Dict[str, Any]:
         """
-        Calculate actual prediction flips for NEWS RECOMMENDATION (listwise format).
+        Calculate actual prediction flips for NEWS RECOMMENDATION.
 
-        In listwise format:
-        - batch["label"] is the position index (always 0 for first positive)
-        - The ACTUAL news labels are in the impressions
-        - We need to check if the model is ranking fake news (label=1) lower after unlearning
+        For forget set (user-fake pairs with true label=1):
+        - pred=1 means model predicts user WILL click fake news (BAD)
+        - pred=0 means model predicts user WON'T click fake news (GOOD)
+
+        We want: label prediction changes from 1→0 (stopped predicting fake clicks)
         """
-        # Get predictions on ACTUAL candidates (not positions)
-        # We need to check: for label=1 candidates, are they ranked lower?
-
-        # Collect actual candidate labels and their rankings
         label_1_total = 0
-        actual_flips = 0
-        remained_correct = 0
-        remained_wrong = 0
-        wrong_direction_flips = 0
+        actual_flips = 0  # Changed from pred=1 to pred=0 (GOOD)
+        still_predicting_fake = 0  # Still pred=1 (BAD)
+        already_predicting_real = 0  # Already pred=0 (OK)
+        wrong_direction_flips = 0  # Changed from pred=0 to pred=1 (VERY BAD)
 
         sample_idx = 0
 
@@ -277,32 +280,26 @@ class UnlearningEvaluator:
             if batch is None:
                 continue
 
-            # For each sample in batch
             batch_size = len(batch["label"]) if isinstance(batch["label"], torch.Tensor) else 1
 
             for i in range(batch_size):
-                # The predictions are positions (which candidate was ranked first)
                 pred_before = predictions_before.get(sample_idx, 0)
                 pred_after = predictions_after.get(sample_idx, 0)
 
-                # In listwise format, we care about:
-                # - Was the positive (fake) candidate ranked first? (position 0)
-                # After unlearning, we want it ranked lower (position > 0)
-
-                # Since impressions are sorted [positive, negatives...]
-                # Position 0 = selected the fake news (BAD)
-                # Position > 0 = selected a real news (GOOD)
-
                 label_1_total += 1
 
-                if pred_before == 0 and pred_after > 0:
-                    actual_flips += 1  # FLIPPED: Was ranking fake first, now ranks real first
+                if pred_before == 1 and pred_after == 0:
+                    # ✓ SUCCESSFUL: Stopped predicting user will click fake news
+                    actual_flips += 1
+                elif pred_before == 1 and pred_after == 1:
+                    # ✗ FAILED: Still predicting user will click fake news
+                    still_predicting_fake += 1
                 elif pred_before == 0 and pred_after == 0:
-                    remained_correct += 1  # STILL BAD: Still ranking fake news first
-                elif pred_before > 0 and pred_after > 0:
-                    remained_wrong += 1  # STAYED GOOD: Was already ranking real news first
-                elif pred_before > 0 and pred_after == 0:
-                    wrong_direction_flips += 1  # REGRESSION: Started ranking fake news first!
+                    # ~ ALREADY GOOD: Was already predicting user won't click fake
+                    already_predicting_real += 1
+                elif pred_before == 0 and pred_after == 1:
+                    # ⚠ REGRESSION: Started predicting user will click fake news!
+                    wrong_direction_flips += 1
 
                 sample_idx += 1
 
@@ -311,8 +308,8 @@ class UnlearningEvaluator:
         return {
             "actual_flips": actual_flips,
             "actual_flip_rate": actual_flip_rate,
-            "remained_correct": remained_correct,
-            "remained_wrong": remained_wrong,
+            "still_predicting_fake": still_predicting_fake,
+            "already_predicting_real": already_predicting_real,
             "wrong_direction_flips": wrong_direction_flips,
             "label_1_total": label_1_total,
         }
@@ -479,16 +476,20 @@ class UnlearningEvaluator:
         print(f"    Before - AUC: {before.get('auc', 0.5):.4f}, Acc: {before['accuracy']:.4f}")
         print(f"    After  - AUC: {after.get('auc', 0.5):.4f}, Acc: {after['accuracy']:.4f}")
 
-        print(f"\n  Ranking Changes (Fake news samples):")
-        print(f"    Total fake news contexts: {actual_flips['label_1_total']}")
+        print(f"\n  Label Prediction Changes (User-Fake pairs):")
+        print(f"    Total forget samples (true label=1): {actual_flips['label_1_total']}")
         print(
-            f"    ✓ Stopped ranking fake first (0→>0): {actual_flips['actual_flips']} ({actual_flips['actual_flip_rate']:.1%})"
+            f"    ✓ Flipped prediction (pred 1→0): {actual_flips['actual_flips']} ({actual_flips['actual_flip_rate']:.1%})"
         )
-        print(f"    ✗ Still ranking fake first (0→0): {actual_flips['remained_correct']}")
-        print(f"    ~ Already not ranking fake first (>0→>0): {actual_flips['remained_wrong']}")
+        print(
+            f"    ✗ Still predicting fake click (pred 1→1): {actual_flips['still_predicting_fake']}"
+        )
+        print(
+            f"    ~ Already predicting no click (pred 0→0): {actual_flips['already_predicting_real']}"
+        )
         if actual_flips["wrong_direction_flips"] > 0:
             print(
-                f"    ⚠ Started ranking fake first (>0→0): {actual_flips['wrong_direction_flips']}"
+                f"    ⚠ Started predicting fake click (pred 0→1): {actual_flips['wrong_direction_flips']}"
             )
 
         print(f"\n  Forgetting Quality:")

@@ -22,6 +22,14 @@ help:
 	@echo "  make train-nrms-glove                    - Train NRMS GloVe"
 	@echo "  make train-nrms-all                      - Train all NRMS variants"
 	@echo ""
+	@echo "Training - NAML Model:"
+	@echo "  make train-naml-bert-ft                  - Train NAML BERT fine-tune"
+	@echo "  make train-naml-bert-frozen              - Train NAML BERT frozen"
+	@echo "  make train-naml-roberta-ft               - Train NAML RoBERTa fine-tune"
+	@echo "  make train-naml-roberta-frozen           - Train NAML RoBERTa frozen"
+	@echo "  make train-naml-glove                    - Train NAML GloVe"
+	@echo "  make train-naml-all                      - Train all NAML variants"
+	@echo ""
 	@echo "Training - Specific Model Types:"
 	@echo "  make train-clean CONFIG=...              - Train clean model only"
 	@echo "  make train-poisoned CONFIG=...           - Train poisoned model only"
@@ -40,6 +48,15 @@ help:
 	@echo "  make unlearn-ratio                       - Unlearn with ratio mode (example)"
 	@echo "  make unlearn-multi-trials                - Unlearn with multiple trials (example)"
 	@echo "  make unlearn-multi-ratio                 - Unlearn with multiple ratios (example)"
+	@echo ""
+	@echo "Multi-Ratio × Multi-Trial Experiments:"
+	@echo "  make experiment-unlearn-quick            - Quick test (2 ratios × 2 trials, ~2min)"
+	@echo "  make experiment-unlearn-standard         - Standard (4 ratios × 3 trials, ~15min)"
+	@echo "  make experiment-unlearn-comprehensive    - Comprehensive (5 ratios × 5 trials, ~30min)"
+	@echo "  make experiment-unlearn-extended         - Extended (6 ratios × 5 trials, ~40min)"
+	@echo "  make experiment-unlearn-label-correction - Label correction (4 ratios × 3 trials)"
+	@echo "  make experiment-unlearn-custom           - Custom (specify parameters)"
+	@echo "  make experiment-unlearn-dry-run          - Preview commands without executing"
 	@echo ""
 	@echo "Utilities:"
 	@echo "  make list-methods                        - List available unlearning methods"
@@ -88,6 +105,25 @@ train-nrms-glove:
 	python scripts/train.py --config configs/experiments/nrms/nrms_glove.yaml --train-all
 
 train-nrms-all: train-nrms-bert-ft train-nrms-bert-frozen train-nrms-glove
+
+# ========== Training Commands - NAML Model ==========
+
+train-naml-bert-ft:
+	python scripts/train.py --config configs/experiments/naml/naml_bert_finetune.yaml --train-all
+
+train-naml-bert-frozen:
+	python scripts/train.py --config configs/experiments/naml/naml_bert_frozen.yaml --train-all
+
+train-naml-roberta-ft:
+	python scripts/train.py --config configs/experiments/naml/naml_roberta_finetune.yaml --train-all
+
+train-naml-roberta-frozen:
+	python scripts/train.py --config configs/experiments/naml/naml_roberta_frozen.yaml --train-all
+
+train-naml-glove:
+	python scripts/train.py --config configs/experiments/naml/naml_glove.yaml --train-all
+
+train-naml-all: train-naml-bert-ft train-naml-bert-frozen train-naml-roberta-ft train-naml-roberta-frozen train-naml-glove
 
 # ========== Training Commands - Specific Model Types ==========
 
@@ -201,6 +237,66 @@ unlearn-multi-ratio:
 # List available unlearning methods
 list-methods:
 	python scripts/unlearn.py --list-methods
+
+# ========== Multi-Ratio × Multi-Trial Unlearning Experiments ==========
+
+# Quick test - 2 ratios × 2 trials (2 min)
+experiment-unlearn-quick:
+	@echo "Running quick unlearning experiment (2 ratios × 2 trials)..."
+	python scripts/run_unlearning_experiments.py \
+		--model-configs configs/experiments/nrms/nrms_glove.yaml \
+		--checkpoints /Users/ploymel/Documents/plm4newsrs/outputs/politifact/nrms_model/glove_300_frozen/checkpoints/poisoned-epoch=01-val_auc=0.6636.ckpt \
+		--data-path data/politifact/train_poisoned.csv \
+		--ratios 0.05 0.10 \
+		--num-trials 2 \
+		--quick-test \
+		--num-steps 1 \
+		--save-summary
+
+# Standard - 4 ratios × 3 trials (15 min)
+experiment-unlearn-standard:
+	@echo "Running standard unlearning experiment (4 ratios × 3 trials)..."
+	python scripts/run_unlearning_experiments.py \
+		--model-configs configs/experiments/simple/bert_finetune.yaml \
+		--checkpoints outputs/simple_bert_finetune/checkpoints/poisoned.ckpt \
+		--data-path data/politifact/train_poisoned.csv \
+		--ratios 0.01 0.05 0.10 0.20 \
+		--num-trials 3 \
+		--save-summary
+
+# Comprehensive - 5 ratios × 5 trials (30 min)
+experiment-unlearn-comprehensive:
+	@echo "Running comprehensive unlearning experiment (5 ratios × 5 trials)..."
+	python scripts/run_unlearning_experiments.py \
+		--model-configs configs/experiments/simple/bert_finetune.yaml \
+		--checkpoints outputs/simple_bert_finetune/checkpoints/poisoned.ckpt \
+		--data-path data/politifact/train_poisoned.csv \
+		--ratios 0.01 0.05 0.10 0.20 0.50 \
+		--num-trials 5 \
+		--save-summary
+
+# Custom experiment with parameters
+experiment-unlearn-custom:
+	@echo "Running custom unlearning experiment..."
+	@echo "Usage: make experiment-unlearn-custom MODEL_CONFIG=... CHECKPOINT=... DATA_PATH=... RATIOS='0.05 0.10' TRIALS=3"
+	python scripts/run_unlearning_experiments.py \
+		--model-configs $(MODEL_CONFIG) \
+		--checkpoints $(CHECKPOINT) \
+		--data-path $(DATA_PATH) \
+		--ratios $(RATIOS) \
+		--num-trials $(TRIALS) \
+		--save-summary
+
+# Dry run - preview commands without executing
+experiment-unlearn-dry-run:
+	@echo "Dry run - printing commands without executing..."
+	python scripts/run_unlearning_experiments.py \
+		--model-configs configs/experiments/nrms/nrms_glove.yaml \
+		--checkpoints /Users/ploymel/Documents/plm4newsrs/outputs/politifact/nrms_model/glove_300_frozen/checkpoints/poisoned-epoch=01-val_auc=0.6636.ckpt \
+		--data-path data/politifact/train_poisoned.csv \
+		--ratios 0.05 0.10 \
+		--num-trials 2 \
+		--dry-run
 
 # ========== Cleanup Commands ==========
 

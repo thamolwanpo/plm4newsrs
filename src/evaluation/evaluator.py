@@ -7,8 +7,7 @@ from typing import Dict, List, Optional, Any
 from tqdm import tqdm
 
 from configs import ModelConfig
-from src.models.simple import LitRecommender
-from src.models.nrms import LitNRMSRecommender
+from src.models.registry import get_model_class
 from src.utils.seed import set_seed
 
 from .benchmark_dataset import BenchmarkDataset, benchmark_collate_fn
@@ -133,13 +132,9 @@ class ModelEvaluator:
 
         # Load model
         print(f"Loading model from: {model_path}")
-        if self.config.architecture == "nrms":
-            model = LitNRMSRecommender.load_from_checkpoint(str(model_path), config=self.config)
-        elif self.config.architecture == "simple":
-            model = LitRecommender.load_from_checkpoint(str(model_path), config=self.config)
-        else:
-            raise ValueError(f"Unknown architecture: {self.config.architecture}")
-
+        model = get_model_class(self.config.architecture).load_from_checkpoint(
+            str(model_path), config=self.config
+        )
         model.to(self.device)
         model.eval()
 

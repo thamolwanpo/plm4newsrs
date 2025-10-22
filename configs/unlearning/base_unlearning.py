@@ -66,7 +66,7 @@ class BaseUnlearningConfig:
     def __post_init__(self):
         """Validate configuration after initialization."""
         # Validate mode
-        if self.mode not in ["manual", "ratio"]:
+        if self.mode not in ["manual", "ratio", "multi-ratio"]:
             raise ValueError(f"mode must be 'manual' or 'ratio', got '{self.mode}'")
 
         # Validate manual mode

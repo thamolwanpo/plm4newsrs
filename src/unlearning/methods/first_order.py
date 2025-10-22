@@ -286,15 +286,12 @@ class FirstOrderUnlearning(BaseUnlearningMethod):
         self, dataloader: torch.utils.data.DataLoader
     ) -> Dict[str, torch.Tensor]:
         """
-        Compute the SUM of gradients (Σ∇ℓ) over the entire dataset,
-        to match the output of the first compute_gradients function.
-
-        Modification: The final division by num_samples is removed.
+        Compute the AVERAGE gradient over the entire dataset.
+        Returns: ∇ℓ = (1/N) * Σ∇ℓ_i
         """
         self.model.train()
         self.model.zero_grad()
 
-        # Accumulated gradients now represents the SUM OF GRADIENTS (weighted by batch size)
         accumulated_grads = {}
         num_samples = 0
 
@@ -315,20 +312,18 @@ class FirstOrderUnlearning(BaseUnlearningMethod):
 
             # Forward pass
             scores = self.model(batch_tensors)
-            # Assuming self.criterion is the loss function (e.g., nn.CrossEntropyLoss())
             loss = self.criterion(scores, labels)
 
             # Backward pass
             loss.backward()
 
-            # Accumulate the SUM of gradients
-            # (param.grad holds the average gradient, so we multiply by batch_size)
+            # Accumulate gradients (weighted by batch size)
             for name, param in self.model.named_parameters():
                 if not param.requires_grad:
-                    continue  # Skip frozen parameters
+                    continue
 
                 if param.grad is not None:
-                    # Logic to calculate the sum of gradients for this batch
+                    # Accumulate: sum += grad * batch_size
                     batch_grad_sum = param.grad.clone() * batch_size
 
                     if name not in accumulated_grads:
@@ -341,17 +336,20 @@ class FirstOrderUnlearning(BaseUnlearningMethod):
             # Zero gradients for next iteration
             self.model.zero_grad()
 
-            # --- Aggressive Cleanup (Added to match First Code's practices) ---
+            # Cleanup
             import gc
 
             del batch_tensors, scores, labels, loss
             gc.collect()
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
-            # ----------------------------------------------------------------
 
-        # === THE CRITICAL CHANGE IS HERE ===
-        # We now return the SUM OF GRADIENTS directly: accumulated_grads
+        # === CRITICAL FIX: NORMALIZE BY TOTAL SAMPLES ===
+        if num_samples == 0:
+            return {}
+
+        for name in accumulated_grads:
+            accumulated_grads[name] = accumulated_grads[name] / num_samples
 
         # Count trainable vs frozen
         trainable_count = len(accumulated_grads)
@@ -362,8 +360,8 @@ class FirstOrderUnlearning(BaseUnlearningMethod):
             print(
                 f"     Computed gradients for {trainable_count} trainable params ({frozen_count} frozen)"
             )
+        print(f"     Averaged over {num_samples} samples")
 
-        # RETURN THE SUM OF GRADIENTS
         return accumulated_grads
 
     def get_hyperparameters(self) -> Dict[str, Any]:

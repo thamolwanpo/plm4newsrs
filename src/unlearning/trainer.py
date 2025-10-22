@@ -20,8 +20,7 @@ import copy
 
 from configs import BaseConfig
 from configs.unlearning import BaseUnlearningConfig
-from src.models.simple import LitRecommender
-from src.models.nrms import LitNRMSRecommender
+from src.models.registry import get_model, get_model_class
 from src.data import NewsDataset, collate_fn
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer
@@ -264,16 +263,9 @@ def _load_model(checkpoint_path: Path, config: BaseConfig, device: torch.device)
     print(f"Loading checkpoint: {checkpoint_path}")
 
     # Load model
-    if config.architecture == "nrms":
-        lit_model = LitNRMSRecommender.load_from_checkpoint(
-            str(checkpoint_path), config=config, map_location=device
-        )
-    elif config.architecture == "simple":
-        lit_model = LitRecommender.load_from_checkpoint(
-            str(checkpoint_path), config=config, map_location=device
-        )
-    else:
-        raise ValueError(f"Unknown architecture: {config.architecture}")
+    lit_model = get_model_class(config.architecture).load_from_checkpoint(
+        str(checkpoint_path), config=config, map_location=device
+    )
     lit_model.to(device)
     lit_model.eval()
 
@@ -463,16 +455,7 @@ def _save_unlearned_model(
 
     checkpoint_path = checkpoints_dir / filename
 
-    # Wrap raw model back into LitRecommender to get proper state_dict format
-    from src.models.simple import LitRecommender
-    from src.models.nrms import LitNRMSRecommender
-
-    if model_config.architecture == "nrms":
-        lit_model = LitNRMSRecommender(model_config)
-    elif model_config.architecture == "simple":
-        lit_model = LitRecommender(model_config)
-    else:
-        raise ValueError(f"Unknown architecture: {model_config.architecture}")
+    lit_model = get_model(model_config.architecture, model_config)
     lit_model.model.load_state_dict(unlearned_model.state_dict())
 
     # Create checkpoint matching PyTorch Lightning format
