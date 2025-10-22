@@ -166,14 +166,18 @@ class BaseUnlearningMethod(ABC):
                 if batch is None:
                     continue
 
-                # Move to device
-                if "device_indicator" in batch:
-                    batch["device_indicator"] = batch["device_indicator"].to(self.device)
+                # Move ALL tensors in batch to device
+                batch_tensors = {}
+                for k, v in batch.items():
+                    if isinstance(v, torch.Tensor):
+                        batch_tensors[k] = v.to(self.device)
+                    else:
+                        batch_tensors[k] = v
 
-                labels = batch["label"].to(self.device)
+                labels = batch_tensors["label"]
 
                 # Forward pass
-                scores = self.model(batch)
+                scores = self.model(batch_tensors)
                 loss = criterion(scores, labels)
 
                 total_loss += loss.item()
