@@ -13,52 +13,29 @@ def create_ratio_split(
     output_dir: Optional[Path] = None,
     seed: int = 42,
     stratify_by: Optional[str] = None,
-    removal_strategy: str = "fake_positive_history",  # new default
+    use_label_correction: bool = True,
 ) -> List[Path]:
-    """
-    Create ratio-based splits for unlearning experiments.
-
-    Splits can now remove fake-positive samples and their related negatives
-    within the same (user_id, history_titles) context.
-
-    removal_strategy options:
-        - "complete": remove all rows with forget candidates
-        - "positive_only": remove only positive samples of forget candidates
-        - "fake_positive_history": remove fake-positive interactions and all
-                                   other rows with the same (user_id, history_titles)
-    """
+    """Create ratio-based splits for unlearning experiments."""
 
     data_path = Path(data_path)
 
-    valid_strategies = ["complete", "positive_only", "fake_positive_history"]
-    if removal_strategy not in valid_strategies:
-        raise ValueError(
-            f"Invalid removal_strategy: {removal_strategy}. Must be one of {valid_strategies}."
-        )
-
-    # --- Load Data ---
     print(f"\n{'='*70}")
     print(f"CREATING RATIO-BASED SPLITS")
     print(f"{'='*70}")
     print(f"Source: {data_path}")
     print(f"Ratio: {ratio} ({ratio*100:.1f}%)")
     print(f"Trials: {num_trials}")
-    print(f"Removal Strategy: {removal_strategy}")
+    print(f"Mode: {'Label Correction' if use_label_correction else 'Data Removal'}")
+    print(f"{'='*70}")
 
     df = pd.read_csv(data_path)
     print(f"Total samples: {len(df)}")
 
-    required_cols = {"user_id", "candidate_id", "label", "history_titles"}
-    if removal_strategy == "fake_positive_history":
-        required_cols.add("candidate_is_fake")
+    required_cols = {"user_id", "candidate_id", "label", "history_titles", "candidate_is_fake"}
     missing_cols = required_cols - set(df.columns)
     if missing_cols:
         raise ValueError(f"Missing required columns: {missing_cols}")
 
-    unique_candidates = df["candidate_id"].unique()
-    print(f"Unique candidates: {len(unique_candidates)}")
-
-    # --- Output directory setup ---
     if output_dir is None:
         output_dir = data_path.parent / "unlearning_splits"
 
@@ -69,100 +46,120 @@ def create_ratio_split(
 
     trial_dirs = []
 
-    # --- Create Trials ---
     for trial_idx in range(num_trials):
         print(f"\n{'─'*70}")
         print(f"Creating trial {trial_idx}...")
         np.random.seed(seed + trial_idx)
 
-        # --- Removal Logic ---
-        if removal_strategy == "complete":
-            # Random candidate-level split
-            shuffled_candidates = unique_candidates.copy()
-            np.random.shuffle(shuffled_candidates)
-            n_forget = int(len(shuffled_candidates) * ratio)
+        fake_pos_mask = (df["candidate_is_fake"] == True) & (df["label"] == 1)
+        fake_pos_df = df.loc[fake_pos_mask, ["user_id", "history_titles"]].drop_duplicates()
 
-            forget_candidate_set = set(shuffled_candidates[:n_forget])
-            retain_candidate_set = set(shuffled_candidates[n_forget:])
+        print(f"Found {len(fake_pos_df)} unique fake-positive contexts")
 
-            forget_df = df[df["candidate_id"].isin(forget_candidate_set)].reset_index(drop=True)
-            retain_df = df[~df["candidate_id"].isin(forget_candidate_set)].reset_index(drop=True)
-            verification_message = "Removed all rows of forget candidates (complete)."
+        if len(fake_pos_df) == 0:
+            raise ValueError("No fake-positive interactions found in dataset.")
 
-        elif removal_strategy == "positive_only":
-            # Random positive-only split at (user, candidate, history_titles)
-            pos_triples = df.loc[df["label"] == 1, ["user_id", "candidate_id", "history_titles"]]
-            selected_triples = pos_triples.sample(frac=ratio, random_state=seed + trial_idx)
-            forget_triples = set(map(tuple, selected_triples.values))
+        n_select = max(1, int(len(fake_pos_df) * ratio))
+        selected_contexts = fake_pos_df.sample(n=n_select, random_state=seed + trial_idx)
+        selected_contexts_set = set(map(tuple, selected_contexts.values))
 
-            forget_mask = df.apply(
-                lambda r: (r["user_id"], r["candidate_id"], r["history_titles"]) in forget_triples,
-                axis=1,
-            )
-            forget_df = df[forget_mask].reset_index(drop=True)
-            retain_df = df[~forget_mask].reset_index(drop=True)
-            verification_message = "Removed only selected positive triples."
+        print(f"Selected {n_select} contexts ({ratio*100:.1f}%)")
 
-        elif removal_strategy == "fake_positive_history":
-            # Step 1: Identify all fake-positive rows
-            fake_pos_mask = (df["candidate_is_fake"] == True) & (df["label"] == 1)
-            fake_pos_df = df.loc[fake_pos_mask, ["user_id", "history_titles"]].drop_duplicates()
-            print(f"Fake-positive interactions found: {len(fake_pos_df)}")
+        def is_selected_context(row):
+            return (row["user_id"], row["history_titles"]) in selected_contexts_set
 
-            if len(fake_pos_df) == 0:
-                raise ValueError("No fake-positive interactions found in dataset.")
+        forget_mask = df.apply(is_selected_context, axis=1)
 
-            # Step 2: Randomly select a subset (ratio)
-            n_select = max(1, int(len(fake_pos_df) * ratio))
-            selected_contexts = fake_pos_df.sample(n=n_select, random_state=seed + trial_idx)
-            forget_contexts = set(map(tuple, selected_contexts.values))
+        forget_group_df = df[forget_mask].copy()
+        retain_df = df[~forget_mask].copy()
 
-            # Step 3: Forget all rows sharing same (user_id, history_titles)
-            forget_mask = df.apply(
-                lambda r: (r["user_id"], r["history_titles"]) in forget_contexts,
-                axis=1,
-            )
-            forget_df = df[forget_mask].reset_index(drop=True)
-            retain_df = df[~forget_mask].reset_index(drop=True)
+        n_pos = forget_group_df.query("label == 1").shape[0]
+        n_neg = forget_group_df.query("label == 0").shape[0]
 
-            # Step 4: Verification — ensure no context overlap
-            forget_pairs = set(map(tuple, forget_df[["user_id", "history_titles"]].values))
-            retain_pairs = set(map(tuple, retain_df[["user_id", "history_titles"]].values))
-            overlap = forget_pairs & retain_pairs
-            if overlap:
-                raise ValueError(
-                    f"Overlap detected between forget and retain contexts: {len(overlap)}"
-                )
+        print(
+            f"Selected groups contain: {len(forget_group_df)} samples "
+            f"({n_pos} positive, {n_neg} negative)"
+        )
 
-            n_pos_forgot = forget_df.query("label == 1").shape[0]
-            n_neg_forgot = forget_df.query("label == 0").shape[0]
-            verification_message = (
-                f"Forgot {len(forget_pairs)} (user_id, history_titles) contexts "
-                f"→ {len(forget_df)} rows ({n_pos_forgot} pos, {n_neg_forgot} neg)"
-            )
-
-        # Shuffle within sets
-        forget_df = forget_df.sample(frac=1, random_state=seed + trial_idx).reset_index(drop=True)
-        retain_df = retain_df.sample(frac=1, random_state=seed + trial_idx).reset_index(drop=True)
-
-        # --- Save output ---
         trial_dir = ratio_dir / f"trial_{trial_idx}"
         trial_dir.mkdir(parents=True, exist_ok=True)
 
-        forget_df.to_csv(trial_dir / "forget.csv", index=False)
-        retain_df.to_csv(trial_dir / "retain.csv", index=False)
+        if use_label_correction:
+            forget_df = forget_group_df.copy()
 
-        metadata = {
-            "ratio": ratio,
-            "trial_idx": trial_idx,
-            "seed": seed + trial_idx,
-            "total_samples": len(df),
-            "forget_samples": len(forget_df),
-            "retain_samples": len(retain_df),
-            "removal_strategy": removal_strategy,
-            "created_at": datetime.now().isoformat(),
-            "verification": verification_message,
-        }
+            corrected_df = forget_group_df.copy()
+            fake_pos_in_group = (corrected_df["candidate_is_fake"] == True) & (
+                corrected_df["label"] == 1
+            )
+            corrected_df.loc[fake_pos_in_group, "label"] = 0
+
+            n_flipped = fake_pos_in_group.sum()
+
+            forget_df = forget_df.sample(frac=1, random_state=seed + trial_idx).reset_index(
+                drop=True
+            )
+            corrected_df = corrected_df.sample(frac=1, random_state=seed + trial_idx).reset_index(
+                drop=True
+            )
+            retain_df = retain_df.sample(frac=1, random_state=seed + trial_idx).reset_index(
+                drop=True
+            )
+
+            forget_df.to_csv(trial_dir / "forget.csv", index=False)
+            corrected_df.to_csv(trial_dir / "corrected.csv", index=False)
+            retain_df.to_csv(trial_dir / "retain.csv", index=False)
+
+            verification_message = (
+                f"Label Correction: {n_flipped} fake-positive labels flipped (1→0), "
+                f"preserving {len(forget_df)} total samples in groups"
+            )
+
+            metadata = {
+                "ratio": ratio,
+                "trial_idx": trial_idx,
+                "seed": seed + trial_idx,
+                "mode": "label_correction",
+                "use_label_correction": True,
+                "total_samples": len(df),
+                "forget_samples": len(forget_df),
+                "corrected_samples": len(corrected_df),
+                "retain_samples": len(retain_df),
+                "labels_flipped": int(n_flipped),
+                "created_at": datetime.now().isoformat(),
+                "verification": verification_message,
+                "note": "forget.csv has wrong labels, corrected.csv has flipped labels",
+            }
+
+        else:
+            forget_df = forget_group_df.copy()
+
+            forget_df = forget_df.sample(frac=1, random_state=seed + trial_idx).reset_index(
+                drop=True
+            )
+            retain_df = retain_df.sample(frac=1, random_state=seed + trial_idx).reset_index(
+                drop=True
+            )
+
+            forget_df.to_csv(trial_dir / "forget.csv", index=False)
+            retain_df.to_csv(trial_dir / "retain.csv", index=False)
+
+            verification_message = (
+                f"Data Removal: {len(forget_df)} samples removed "
+                f"({n_pos} positive, {n_neg} negative)"
+            )
+
+            metadata = {
+                "ratio": ratio,
+                "trial_idx": trial_idx,
+                "seed": seed + trial_idx,
+                "mode": "data_removal",
+                "use_label_correction": False,
+                "total_samples": len(df),
+                "forget_samples": len(forget_df),
+                "retain_samples": len(retain_df),
+                "created_at": datetime.now().isoformat(),
+                "verification": verification_message,
+            }
 
         with open(trial_dir / "metadata.json", "w") as f:
             json.dump(metadata, f, indent=2)
@@ -172,13 +169,11 @@ def create_ratio_split(
         trial_dirs.append(trial_dir)
 
     print(f"\n{'='*70}")
-    print(f"✅ Created {num_trials} ratio-based splits (strategy={removal_strategy})")
+    print(f"✅ Created {num_trials} trials")
+    print(f"Mode: {'Label Correction' if use_label_correction else 'Data Removal'}")
     print(f"{'='*70}")
 
     return trial_dirs
-
-
-# ---------------------------------------------------------------------
 
 
 def create_multiple_ratios(
@@ -188,11 +183,9 @@ def create_multiple_ratios(
     output_dir: Optional[Path] = None,
     seed: int = 42,
     stratify_by: Optional[str] = None,
-    removal_strategy: str = "fake_positive_history",
+    use_label_correction: bool = True,
 ) -> Dict[float, List[Path]]:
-    """
-    Create splits for multiple forget ratios using the chosen removal strategy.
-    """
+    """Create splits for multiple forget ratios."""
     all_trial_dirs = {}
     for ratio in ratios:
         trial_dirs = create_ratio_split(
@@ -202,7 +195,7 @@ def create_multiple_ratios(
             output_dir=output_dir,
             seed=seed,
             stratify_by=stratify_by,
-            removal_strategy=removal_strategy,
+            use_label_correction=use_label_correction,
         )
         all_trial_dirs[ratio] = trial_dirs
     return all_trial_dirs

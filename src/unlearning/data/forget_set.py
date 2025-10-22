@@ -11,65 +11,41 @@ import json
 class ForgetSetMetadata:
     """Metadata for forget set."""
 
-    mode: str  # "manual" or "ratio"
+    mode: str
+    use_label_correction: bool = False
     ratio: Optional[float] = None
     trial_idx: Optional[int] = None
     num_forget: int = 0
+    num_corrected: int = 0
     num_retain: int = 0
     created_at: Optional[str] = None
     source_file: Optional[str] = None
 
 
 class ForgetSet:
-    """
-    Manages forget and retain sets for unlearning.
-
-    Supports two modes:
-    1. Manual: User provides explicit forget/retain CSV paths
-    2. Ratio: Load from pre-generated splits directory
-
-    Example:
-        # Manual mode
-        >>> forget_set = ForgetSet.from_manual(
-        ...     forget_path="data/forget.csv",
-        ...     retain_path="data/retain.csv"
-        ... )
-
-        # Ratio mode
-        >>> forget_set = ForgetSet.from_ratio(
-        ...     splits_dir="data/politifact/unlearning_splits/ratio_0.05",
-        ...     trial_idx=0
-        ... )
-    """
-
     def __init__(
-        self, forget_df: pd.DataFrame, retain_df: pd.DataFrame, metadata: ForgetSetMetadata
+        self,
+        forget_df: pd.DataFrame,
+        retain_df: pd.DataFrame,
+        metadata: ForgetSetMetadata,
+        corrected_df: Optional[pd.DataFrame] = None,
     ):
-        """
-        Initialize ForgetSet.
-
-        Args:
-            forget_df: DataFrame with forget samples
-            retain_df: DataFrame with retain samples
-            metadata: Metadata about this split
-        """
         self.forget_df = forget_df
         self.retain_df = retain_df
+        self.corrected_df = corrected_df
         self.metadata = metadata
 
-        # Validate
+        if corrected_df is not None:
+            self.metadata.use_label_correction = True
+
         self._validate()
 
     def _validate(self):
-        """Validate forget and retain sets."""
-        # Check not empty
         if len(self.forget_df) == 0:
             raise ValueError("Forget set is empty")
-
         if len(self.retain_df) == 0:
             raise ValueError("Retain set is empty")
 
-        # Check required columns (should match training data format)
         required_cols = {
             "user_id",
             "history_titles",
@@ -79,51 +55,35 @@ class ForgetSet:
             "candidate_is_fake",
         }
 
-        forget_cols = set(self.forget_df.columns)
-        retain_cols = set(self.retain_df.columns)
+        for name, df in [("Forget", self.forget_df), ("Retain", self.retain_df)]:
+            missing = required_cols - set(df.columns)
+            if missing:
+                raise ValueError(f"{name} set missing columns: {missing}")
 
-        if not required_cols.issubset(forget_cols):
-            missing = required_cols - forget_cols
-            raise ValueError(f"Forget set missing columns: {missing}")
+        if self.corrected_df is not None:
+            missing = required_cols - set(self.corrected_df.columns)
+            if missing:
+                raise ValueError(f"Corrected set missing columns: {missing}")
 
-        if not required_cols.issubset(retain_cols):
-            missing = required_cols - retain_cols
-            raise ValueError(f"Retain set missing columns: {missing}")
+            if len(self.forget_df) != len(self.corrected_df):
+                raise ValueError(
+                    f"Forget ({len(self.forget_df)}) and corrected ({len(self.corrected_df)}) "
+                    f"must have same number of samples"
+                )
 
-        # Check no overlap (by candidate_id)
-        forget_ids = set(self.forget_df["candidate_id"])
-        retain_ids = set(self.retain_df["candidate_id"])
-        overlap = forget_ids & retain_ids
-
-        # if overlap:
-        #     raise ValueError(
-        #         f"Overlap detected between forget and retain sets: "
-        #         f"{len(overlap)} common candidate IDs"
-        #     )
-
-        print(f"✅ ForgetSet validation passed")
-        print(f"   Forget: {len(self.forget_df)} samples")
-        print(f"   Retain: {len(self.retain_df)} samples")
-        # print(f"   No overlap detected")
+            print(f"✅ ForgetSet validation passed (Label Correction Mode)")
+            print(f"   Z (wrong labels): {len(self.forget_df)} samples")
+            print(f"   Z̃ (correct labels): {len(self.corrected_df)} samples")
+            print(f"   Retain: {len(self.retain_df)} samples")
+        else:
+            print(f"✅ ForgetSet validation passed (Data Removal Mode)")
+            print(f"   Forget: {len(self.forget_df)} samples")
+            print(f"   Retain: {len(self.retain_df)} samples")
 
     @classmethod
-    def from_manual(cls, forget_path: Path, retain_path: Path) -> "ForgetSet":
-        """
-        Load forget set from explicit paths (Manual mode).
-
-        Args:
-            forget_path: Path to forget set CSV
-            retain_path: Path to retain set CSV
-
-        Returns:
-            ForgetSet instance
-
-        Example:
-            >>> forget_set = ForgetSet.from_manual(
-            ...     forget_path=Path("data/forget.csv"),
-            ...     retain_path=Path("data/retain.csv")
-            ... )
-        """
+    def from_manual(
+        cls, forget_path: Path, retain_path: Path, corrected_path: Optional[Path] = None
+    ) -> "ForgetSet":
         forget_path = Path(forget_path)
         retain_path = Path(retain_path)
 
@@ -131,52 +91,47 @@ class ForgetSet:
         print("LOADING FORGET SET (Manual Mode)")
         print(f"{'='*70}")
         print(f"Forget path: {forget_path}")
+        if corrected_path:
+            print(f"Corrected path: {corrected_path}")
         print(f"Retain path: {retain_path}")
 
-        # Check files exist
         if not forget_path.exists():
             raise FileNotFoundError(f"Forget set not found: {forget_path}")
-
         if not retain_path.exists():
             raise FileNotFoundError(f"Retain set not found: {retain_path}")
 
-        # Load CSVs
         print("\nLoading CSVs...")
         forget_df = pd.read_csv(forget_path)
         retain_df = pd.read_csv(retain_path)
 
-        # Create metadata
+        corrected_df = None
+        if corrected_path is not None:
+            corrected_path = Path(corrected_path)
+            if not corrected_path.exists():
+                raise FileNotFoundError(f"Corrected set not found: {corrected_path}")
+            corrected_df = pd.read_csv(corrected_path)
+            print(f"Loaded corrected set: {len(corrected_df)} samples")
+
         metadata = ForgetSetMetadata(
             mode="manual",
+            use_label_correction=(corrected_df is not None),
             num_forget=len(forget_df),
+            num_corrected=len(corrected_df) if corrected_df is not None else 0,
             num_retain=len(retain_df),
-            source_file=f"{forget_path.name}, {retain_path.name}",
+            source_file=forget_path.name,
         )
 
         print(f"✅ Loaded forget set (manual mode)")
+        print(f"   Mode: {'Label Correction' if corrected_df is not None else 'Data Removal'}")
         print(f"   Forget samples: {len(forget_df)}")
+        if corrected_df is not None:
+            print(f"   Corrected samples: {len(corrected_df)}")
         print(f"   Retain samples: {len(retain_df)}")
 
-        return cls(forget_df, retain_df, metadata)
+        return cls(forget_df, retain_df, metadata, corrected_df=corrected_df)
 
     @classmethod
     def from_ratio(cls, splits_dir: Path, trial_idx: int = 0) -> "ForgetSet":
-        """
-        Load forget set from splits directory (Ratio mode).
-
-        Args:
-            splits_dir: Directory containing splits (e.g., ratio_0.05/trial_0/)
-            trial_idx: Trial index to load
-
-        Returns:
-            ForgetSet instance
-
-        Example:
-            >>> forget_set = ForgetSet.from_ratio(
-            ...     splits_dir=Path("data/politifact/unlearning_splits/ratio_0.05"),
-            ...     trial_idx=0
-            ... )
-        """
         splits_dir = Path(splits_dir)
         trial_dir = splits_dir / f"trial_{trial_idx}"
 
@@ -186,41 +141,48 @@ class ForgetSet:
         print(f"Splits directory: {splits_dir}")
         print(f"Trial: {trial_idx}")
 
-        # Check directory exists
         if not trial_dir.exists():
             raise FileNotFoundError(
                 f"Trial directory not found: {trial_dir}\n"
                 f"Available trials: {list(splits_dir.glob('trial_*'))}"
             )
 
-        # Load forget and retain
-        forget_path = trial_dir / "forget.csv"
-        retain_path = trial_dir / "retain.csv"
+        forget_path = trial_dir / "train_unlearn.csv"
+        corrected_path = trial_dir / "corrected.csv"
+        retain_path = trial_dir / "train_remaining.csv"
         metadata_path = trial_dir / "metadata.json"
 
         if not forget_path.exists():
             raise FileNotFoundError(f"Forget set not found: {forget_path}")
-
         if not retain_path.exists():
             raise FileNotFoundError(f"Retain set not found: {retain_path}")
 
-        print("\nLoading CSVs...")
+        use_label_correction = corrected_path.exists()
+
+        print(f"\nDetected mode: {'Label Correction' if use_label_correction else 'Data Removal'}")
+        print("Loading CSVs...")
+
         forget_df = pd.read_csv(forget_path)
         retain_df = pd.read_csv(retain_path)
 
-        # Load metadata if available
+        corrected_df = None
+        if use_label_correction:
+            corrected_df = pd.read_csv(corrected_path)
+            print(f"Loaded corrected.csv: {len(corrected_df)} samples")
+
         ratio = None
         if metadata_path.exists():
             with open(metadata_path, "r") as f:
                 metadata_dict = json.load(f)
                 ratio = metadata_dict.get("ratio")
 
-        # Create metadata
         metadata = ForgetSetMetadata(
             mode="ratio",
+            use_label_correction=use_label_correction,
             ratio=ratio,
             trial_idx=trial_idx,
             num_forget=len(forget_df),
+            num_corrected=len(corrected_df) if corrected_df is not None else 0,
             num_retain=len(retain_df),
             source_file=str(trial_dir),
         )
@@ -228,10 +190,21 @@ class ForgetSet:
         print(f"✅ Loaded forget set (ratio mode)")
         print(f"   Ratio: {ratio}")
         print(f"   Trial: {trial_idx}")
+        print(f"   Mode: {'Label Correction' if use_label_correction else 'Data Removal'}")
         print(f"   Forget samples: {len(forget_df)}")
+        if corrected_df is not None:
+            print(f"   Corrected samples: {len(corrected_df)}")
         print(f"   Retain samples: {len(retain_df)}")
 
-        return cls(forget_df, retain_df, metadata)
+        return cls(forget_df, retain_df, metadata, corrected_df=corrected_df)
+
+    def get_corrected_dataframe(self) -> pd.DataFrame:
+        if self.corrected_df is None:
+            raise ValueError("No corrected set available. This ForgetSet is in data removal mode.")
+        return self.corrected_df.copy()
+
+    def is_label_correction(self) -> bool:
+        return self.corrected_df is not None
 
     def get_forget_dataframe(self) -> pd.DataFrame:
         """Get forget set as DataFrame."""
@@ -254,16 +227,16 @@ class ForgetSet:
 
         Creates:
             output_dir/
-                forget.csv
-                retain.csv
+                train_unlearn.csv
+                train_remaining.csv
                 metadata.json
         """
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
         # Save CSVs
-        self.forget_df.to_csv(output_dir / "forget.csv", index=False)
-        self.retain_df.to_csv(output_dir / "retain.csv", index=False)
+        self.forget_df.to_csv(output_dir / "train_unlearn.csv", index=False)
+        self.retain_df.to_csv(output_dir / "train_remaining.csv", index=False)
 
         # Save metadata
         metadata_dict = {

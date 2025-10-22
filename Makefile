@@ -14,12 +14,18 @@ help:
 	@echo "Evaluation:"
 	@echo "  make evaluate CONFIG=path/to/config.yaml  - Evaluate trained model"
 	@echo ""
-	@echo "Unlearning:"
+	@echo "Unlearning (Config-based - RECOMMENDED):"
+	@echo "  make unlearn-config-manual                - Unlearn with manual config"
+	@echo "  make unlearn-config-ratio                 - Unlearn with ratio config"
+	@echo "  make unlearn-custom CONFIG=path/to/config.yaml CHECKPOINT=path/to/ckpt"
+	@echo ""
+	@echo "Unlearning (Legacy - Command-line args):"
 	@echo "  make unlearn-manual                       - Unlearn with manual mode (example)"
 	@echo "  make unlearn-ratio                        - Unlearn with ratio mode (example)"
 	@echo "  make unlearn-multi-trials                 - Unlearn with multiple trials (example)"
 	@echo "  make unlearn-multi-ratio                  - Unlearn with multiple ratios (example)"
-	@echo "  make create-splits                        - Create ratio-based splits only"
+	@echo ""
+	@echo "Utilities:"
 	@echo "  make list-methods                         - List available unlearning methods"
 	@echo ""
 	@echo "Cleanup:"
@@ -45,11 +51,47 @@ train-simple-glove:
 evaluate:
 	python scripts/evaluate.py --config $(CONFIG)
 
-# ========== Unlearning Commands ==========
+# ========== Config-Based Unlearning Commands (NEW & RECOMMENDED) ==========
+
+# Manual mode with config file
+unlearn-config-manual:
+	@echo "Running config-based unlearning (MANUAL mode)..."
+	python scripts/unlearn.py \
+		--model-config configs/experiments/simple/bert_finetune.yaml \
+		--unlearn-config configs/experiments/unlearning/first_order_manual.yaml \
+		--model-checkpoint /Users/ploymel/Documents/plm4newsrs/outputs/politifact/simple_model/glove_300_frozen/checkpoints/poisoned-epoch=11-val_auc=0.7394.ckpt
+
+# Ratio mode with config file
+unlearn-config-ratio:
+	@echo "Running config-based unlearning (RATIO mode)..."
+	python scripts/unlearn.py \
+		--model-config configs/experiments/simple/glove.yaml \
+		--unlearn-config configs/experiments/unlearning/first_order_ratio.yaml \
+		--model-checkpoint /Users/ploymel/Documents/plm4newsrs/outputs/politifact/simple_model/glove_300_frozen/checkpoints/poisoned-epoch=11-val_auc=0.7394.ckpt
+
+# Custom config (user provides paths)
+unlearn-custom:
+	@echo "Running custom config-based unlearning..."
+	python scripts/unlearn.py \
+		--model-config $(MODEL_CONFIG) \
+		--unlearn-config $(UNLEARN_CONFIG) \
+		--model-checkpoint $(CHECKPOINT)
+
+# Config with overrides
+unlearn-config-override:
+	@echo "Running config-based unlearning with command-line overrides..."
+	python scripts/unlearn.py \
+		--model-config configs/experiments/simple/bert_finetune.yaml \
+		--unlearn-config configs/experiments/unlearning/first_order_manual.yaml \
+		--model-checkpoint /Users/ploymel/Documents/plm4newsrs/outputs/politifact/simple_model/glove_300_frozen/checkpoints/poisoned-epoch=11-val_auc=0.7394.ckpt \
+		--learning-rate 0.001 \
+		--num-steps 5
+
+# ========== Legacy Unlearning Commands (Command-line args) ==========
 
 # Manual mode: explicit forget/retain paths
 unlearn-manual:
-	@echo "Running unlearning in MANUAL mode..."
+	@echo "Running unlearning in MANUAL mode (legacy)..."
 	python scripts/unlearn.py \
 		--model-config configs/experiments/simple/bert_finetune.yaml \
 		--model-checkpoint /Users/ploymel/Documents/plm4newsrs/outputs/politifact/simple_model/glove_300_frozen/checkpoints/poisoned-epoch=11-val_auc=0.7394.ckpt \
@@ -62,7 +104,7 @@ unlearn-manual:
 
 # Ratio mode: single ratio, single trial
 unlearn-ratio:
-	@echo "Running unlearning in RATIO mode (single trial)..."
+	@echo "Running unlearning in RATIO mode (single trial, legacy)..."
 	python scripts/unlearn.py \
 		--model-config configs/experiments/simple/glove.yaml \
 		--model-checkpoint /Users/ploymel/Documents/plm4newsrs/outputs/politifact/simple_model/glove_300_frozen/checkpoints/poisoned-epoch=11-val_auc=0.7394.ckpt \
@@ -75,7 +117,7 @@ unlearn-ratio:
 
 # Ratio mode: single ratio, multiple trials
 unlearn-multi-trials:
-	@echo "Running unlearning with MULTIPLE TRIALS..."
+	@echo "Running unlearning with MULTIPLE TRIALS (legacy)..."
 	python scripts/unlearn.py \
 		--model-config configs/experiments/simple/bert_finetune.yaml \
 		--model-checkpoint checkpoints/poisoned-epoch=09-val_auc=0.8500.ckpt \
@@ -89,7 +131,7 @@ unlearn-multi-trials:
 
 # Multi-ratio mode: multiple ratios × multiple trials
 unlearn-multi-ratio:
-	@echo "Running unlearning with MULTIPLE RATIOS x MULTIPLE TRIALS..."
+	@echo "Running unlearning with MULTIPLE RATIOS x MULTIPLE TRIALS (legacy)..."
 	python scripts/unlearn.py \
 		--model-config configs/experiments/simple/bert_finetune.yaml \
 		--model-checkpoint checkpoints/poisoned-epoch=09-val_auc=0.8500.ckpt \
@@ -101,16 +143,6 @@ unlearn-multi-ratio:
 		--learning-rate 0.0005 \
 		--num-steps 3 \
 		--gpu 0
-
-# Create splits only (no unlearning)
-create-splits:
-	@echo "Creating ratio-based splits..."
-	python scripts/unlearn.py \
-		--create-splits-only \
-		--data-path data/politifact/train_poisoned.csv \
-		--ratios 0.01 0.05 0.10 0.20 \
-		--num-trials 5 \
-		--seed 42
 
 # List available unlearning methods
 list-methods:
