@@ -22,6 +22,14 @@ help:
 	@echo "  make train-nrms-glove                    - Train NRMS GloVe"
 	@echo "  make train-nrms-all                      - Train all NRMS variants"
 	@echo ""
+	@echo "Training - NAML Model:"
+	@echo "  make train-naml-bert-ft                  - Train NAML BERT fine-tune"
+	@echo "  make train-naml-bert-frozen              - Train NAML BERT frozen"
+	@echo "  make train-naml-roberta-ft               - Train NAML RoBERTa fine-tune"
+	@echo "  make train-naml-roberta-frozen           - Train NAML RoBERTa frozen"
+	@echo "  make train-naml-glove                    - Train NAML GloVe"
+	@echo "  make train-naml-all                      - Train all NAML variants"
+	@echo ""
 	@echo "Training - Specific Model Types:"
 	@echo "  make train-clean CONFIG=...              - Train clean model only"
 	@echo "  make train-poisoned CONFIG=...           - Train poisoned model only"
@@ -88,6 +96,25 @@ train-nrms-glove:
 	python scripts/train.py --config configs/experiments/nrms/nrms_glove.yaml --train-all
 
 train-nrms-all: train-nrms-bert-ft train-nrms-bert-frozen train-nrms-glove
+
+# ========== Training Commands - NAML Model ==========
+
+train-naml-bert-ft:
+	python scripts/train.py --config configs/experiments/naml/naml_bert_finetune.yaml --train-all
+
+train-naml-bert-frozen:
+	python scripts/train.py --config configs/experiments/naml/naml_bert_frozen.yaml --train-all
+
+train-naml-roberta-ft:
+	python scripts/train.py --config configs/experiments/naml/naml_roberta_finetune.yaml --train-all
+
+train-naml-roberta-frozen:
+	python scripts/train.py --config configs/experiments/naml/naml_roberta_frozen.yaml --train-all
+
+train-naml-glove:
+	python scripts/train.py --config configs/experiments/naml/naml_glove.yaml --train-all
+
+train-naml-all: train-naml-bert-ft train-naml-bert-frozen train-naml-roberta-ft train-naml-roberta-frozen train-naml-glove
 
 # ========== Training Commands - Specific Model Types ==========
 

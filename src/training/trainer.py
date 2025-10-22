@@ -11,8 +11,7 @@ from lightning.pytorch.loggers import TensorBoardLogger
 
 from src.data import NewsDataset
 from src.data.collate import collate_fn
-from src.models.simple import LitRecommender
-from src.models.nrms import LitNRMSRecommender
+from src.models.registry import get_model, get_model_class
 from src.utils.seed import set_seed
 
 
@@ -92,12 +91,7 @@ def train_model(config, device: Optional[torch.device] = None, return_trainer: b
     # Initialize model
     print("\nInitializing model...")
     # Select appropriate Lightning module based on architecture
-    if config.architecture == "nrms":
-        lit_model = LitNRMSRecommender(config)
-    elif config.architecture == "simple":
-        lit_model = LitRecommender(config)
-    else:
-        raise ValueError(f"Unknown architecture: {config.architecture}")
+    lit_model = get_model(config.architecture, config)
 
     # Setup logging
     logger = TensorBoardLogger(save_dir=paths["logs_dir"], name=f"logs_{config.model_type}")
@@ -256,12 +250,9 @@ def resume_training(
     print(f"\nResuming training from: {checkpoint_path}")
 
     # Select appropriate Lightning module based on architecture
-    if config.architecture == "nrms":
-        lit_model = LitNRMSRecommender.load_from_checkpoint(checkpoint_path, config=config)
-    elif config.architecture == "simple":
-        lit_model = LitRecommender.load_from_checkpoint(checkpoint_path, config=config)
-    else:
-        raise ValueError(f"Unknown architecture: {config.architecture}")
+    lit_model = get_model_class(config.architecture).load_from_checkpoint(
+        checkpoint_path, config=config
+    )
 
     # Get paths
     paths = config.get_paths()
