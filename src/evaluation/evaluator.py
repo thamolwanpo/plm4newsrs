@@ -8,6 +8,7 @@ from tqdm import tqdm
 
 from configs import ModelConfig
 from src.models.simple import LitRecommender
+from src.models.nrms import LitNRMSRecommender
 from src.utils.seed import set_seed
 
 from .benchmark_dataset import BenchmarkDataset, benchmark_collate_fn
@@ -132,7 +133,13 @@ class ModelEvaluator:
 
         # Load model
         print(f"Loading model from: {model_path}")
-        model = LitRecommender.load_from_checkpoint(str(model_path), config=self.config)
+        if self.config.architecture == "nrms":
+            model = LitNRMSRecommender.load_from_checkpoint(str(model_path), config=self.config)
+        elif self.config.architecture == "simple":
+            model = LitRecommender.load_from_checkpoint(str(model_path), config=self.config)
+        else:
+            raise ValueError(f"Unknown architecture: {self.config.architecture}")
+
         model.to(self.device)
         model.eval()
 
@@ -182,7 +189,7 @@ class ModelEvaluator:
             "detailed_results": detailed_results,
         }
 
-    def _run_inference(self, model: LitRecommender, dataloader) -> pd.DataFrame:
+    def _run_inference(self, model, dataloader) -> pd.DataFrame:
         """
         Run inference and collect results.
 

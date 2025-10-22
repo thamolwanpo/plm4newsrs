@@ -12,6 +12,7 @@ from lightning.pytorch.loggers import TensorBoardLogger
 from src.data import NewsDataset
 from src.data.collate import collate_fn
 from src.models.simple import LitRecommender
+from src.models.nrms import LitNRMSRecommender
 from src.utils.seed import set_seed
 
 
@@ -90,7 +91,13 @@ def train_model(config, device: Optional[torch.device] = None, return_trainer: b
 
     # Initialize model
     print("\nInitializing model...")
-    lit_model = LitRecommender(config)
+    # Select appropriate Lightning module based on architecture
+    if config.architecture == "nrms":
+        lit_model = LitNRMSRecommender(config)
+    elif config.architecture == "simple":
+        lit_model = LitRecommender(config)
+    else:
+        raise ValueError(f"Unknown architecture: {config.architecture}")
 
     # Setup logging
     logger = TensorBoardLogger(save_dir=paths["logs_dir"], name=f"logs_{config.model_type}")
@@ -148,7 +155,7 @@ def train_model(config, device: Optional[torch.device] = None, return_trainer: b
 
 def train_all_models(config, device: Optional[torch.device] = None) -> Dict[str, str]:
     """
-    Train all available models (clean and poisoned variants).
+    Train all model types (clean and poisoned).
 
     Args:
         config: Base configuration (will be modified for each model type)
@@ -161,49 +168,33 @@ def train_all_models(config, device: Optional[torch.device] = None) -> Dict[str,
     set_seed(config.seed)
 
     print("\n" + "=" * 70)
-    print("TRAINING ALL MODELS")
+    print("TRAINING ALL MODEL TYPES")
     print("=" * 70)
 
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
-    # Get paths
-    paths = config.get_paths()
-    models_dir = paths["models_dir"]
-
-    if not models_dir.exists():
-        print(f"❌ Models directory not found: {models_dir}")
-        return {}
-
-    # Find all available model types
-    model_files = list(models_dir.glob("train_*.csv"))
-    model_types = []
-
-    for file in model_files:
-        model_type = file.stem.replace("train_", "")
-        val_file = models_dir / f"val_{model_type}.csv"
-        if val_file.exists():
-            model_types.append(model_type)
-
-    if not model_types:
-        print(f"❌ No model data files found in {models_dir}")
-        print("Expected files: train_*.csv and val_*.csv")
-        return {}
-
-    print(f"\nFound {len(model_types)} model types: {model_types}")
+    # Define model types to train
+    model_types = ["clean", "poisoned"]
 
     trained_models = {}
+    failed_models = []
 
     for i, model_type in enumerate(model_types, 1):
         print(f"\n{'='*70}")
-        print(f"TRAINING [{i}/{len(model_types)}]: {model_type}")
+        print(f"TRAINING [{i}/{len(model_types)}]: {model_type.upper()}")
         print(f"{'='*70}")
 
         try:
             # Create a copy of config for this model type
-            model_config = config.__class__(**config.__dict__)
+            import copy
+
+            model_config = copy.deepcopy(config)
             model_config.model_type = model_type
+
+            # Update paths to reflect new model type
+            model_config.__post_init__()
 
             # Train
             model_path = train_model(model_config, device)
@@ -212,13 +203,15 @@ def train_all_models(config, device: Optional[torch.device] = None) -> Dict[str,
                 trained_models[model_type] = model_path
                 print(f"✅ Successfully trained {model_type}")
             else:
-                print(f"⚠️ Skipped {model_type} (missing data)")
+                print(f"⚠️ Skipped {model_type} (missing data files)")
+                failed_models.append(model_type)
 
         except Exception as e:
             print(f"❌ Failed to train {model_type}: {e}")
             import traceback
 
             traceback.print_exc()
+            failed_models.append(model_type)
             continue
 
     # Summary
@@ -230,9 +223,12 @@ def train_all_models(config, device: Optional[torch.device] = None) -> Dict[str,
     for model_type, path in trained_models.items():
         print(f"  ✅ {model_type}: {path}")
 
-    if len(trained_models) < len(model_types):
-        failed = set(model_types) - set(trained_models.keys())
-        print(f"\nFailed models: {failed}")
+    if failed_models:
+        print(f"\n⚠️  Failed/Skipped models: {failed_models}")
+        print(f"\nNote: Make sure the following files exist in your data directory:")
+        for model_type in failed_models:
+            print(f"  - train_{model_type}.csv")
+            print(f"  - val_{model_type}.csv")
 
     return trained_models
 
@@ -259,8 +255,13 @@ def resume_training(
     """
     print(f"\nResuming training from: {checkpoint_path}")
 
-    # Load model from checkpoint
-    lit_model = LitRecommender.load_from_checkpoint(checkpoint_path, config=config)
+    # Select appropriate Lightning module based on architecture
+    if config.architecture == "nrms":
+        lit_model = LitNRMSRecommender.load_from_checkpoint(checkpoint_path, config=config)
+    elif config.architecture == "simple":
+        lit_model = LitRecommender.load_from_checkpoint(checkpoint_path, config=config)
+    else:
+        raise ValueError(f"Unknown architecture: {config.architecture}")
 
     # Get paths
     paths = config.get_paths()
