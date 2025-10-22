@@ -6,45 +6,99 @@
 help:
 	@echo "Available commands:"
 	@echo ""
-	@echo "Training:"
+	@echo "Training - Simple Model:"
 	@echo "  make train CONFIG=path/to/config.yaml    - Train with specific config"
-	@echo "  make train-simple                         - Train simple model (BERT fine-tune)"
-	@echo "  make train-simple-glove                   - Train simple model (GloVe)"
+	@echo "  make train-simple-bert-ft                - Train simple BERT fine-tune"
+	@echo "  make train-simple-bert-frozen            - Train simple BERT frozen"
+	@echo "  make train-simple-roberta-ft             - Train simple RoBERTa fine-tune"
+	@echo "  make train-simple-roberta-frozen         - Train simple RoBERTa frozen"
+	@echo "  make train-simple-glove                  - Train simple GloVe"
+	@echo "  make train-simple-all                    - Train all simple variants"
+	@echo ""
+	@echo "Training - NRMS Model:"
+	@echo "  make train-nrms-bert-ft                  - Train NRMS BERT fine-tune"
+	@echo "  make train-nrms-bert-frozen              - Train NRMS BERT frozen"
+	@echo "  make train-nrms-roberta-ft               - Train NRMS RoBERTa fine-tune"
+	@echo "  make train-nrms-glove                    - Train NRMS GloVe"
+	@echo "  make train-nrms-all                      - Train all NRMS variants"
+	@echo ""
+	@echo "Training - Specific Model Types:"
+	@echo "  make train-clean CONFIG=...              - Train clean model only"
+	@echo "  make train-poisoned CONFIG=...           - Train poisoned model only"
+	@echo "  make train-all-types CONFIG=...          - Train both clean & poisoned"
 	@echo ""
 	@echo "Evaluation:"
-	@echo "  make evaluate CONFIG=path/to/config.yaml  - Evaluate trained model"
+	@echo "  make evaluate CONFIG=path/to/config.yaml - Evaluate trained model"
 	@echo ""
 	@echo "Unlearning (Config-based - RECOMMENDED):"
-	@echo "  make unlearn-config-manual                - Unlearn with manual config"
-	@echo "  make unlearn-config-ratio                 - Unlearn with ratio config"
+	@echo "  make unlearn-config-manual               - Unlearn with manual config"
+	@echo "  make unlearn-config-ratio                - Unlearn with ratio config"
 	@echo "  make unlearn-custom CONFIG=path/to/config.yaml CHECKPOINT=path/to/ckpt"
 	@echo ""
 	@echo "Unlearning (Legacy - Command-line args):"
-	@echo "  make unlearn-manual                       - Unlearn with manual mode (example)"
-	@echo "  make unlearn-ratio                        - Unlearn with ratio mode (example)"
-	@echo "  make unlearn-multi-trials                 - Unlearn with multiple trials (example)"
-	@echo "  make unlearn-multi-ratio                  - Unlearn with multiple ratios (example)"
+	@echo "  make unlearn-manual                      - Unlearn with manual mode (example)"
+	@echo "  make unlearn-ratio                       - Unlearn with ratio mode (example)"
+	@echo "  make unlearn-multi-trials                - Unlearn with multiple trials (example)"
+	@echo "  make unlearn-multi-ratio                 - Unlearn with multiple ratios (example)"
 	@echo ""
 	@echo "Utilities:"
-	@echo "  make list-methods                         - List available unlearning methods"
+	@echo "  make list-methods                        - List available unlearning methods"
 	@echo ""
 	@echo "Cleanup:"
-	@echo "  make clean                                - Clean cache files"
-	@echo "  make clean-all                            - Clean everything (cache + outputs)"
+	@echo "  make clean                               - Clean cache files"
+	@echo "  make clean-all                           - Clean everything (cache + outputs)"
 	@echo ""
 	@echo "Installation:"
-	@echo "  make install                              - Install dependencies"
+	@echo "  make install                             - Install dependencies"
 
-# ========== Training Commands ==========
+# ========== Training Commands - Simple Model ==========
 
 train:
 	python scripts/train.py --config $(CONFIG)
 
-train-simple:
-	python scripts/train.py --config configs/experiments/simple/bert_finetune.yaml
+train-simple-bert-ft:
+	python scripts/train.py --config configs/experiments/simple/bert_finetune.yaml --train-all
+
+train-simple-bert-frozen:
+	python scripts/train.py --config configs/experiments/simple/bert_frozen.yaml --train-all
+
+train-simple-roberta-ft:
+	python scripts/train.py --config configs/experiments/simple/roberta_finetune.yaml --train-all
+
+train-simple-roberta-frozen:
+	python scripts/train.py --config configs/experiments/simple/roberta_frozen.yaml --train-all
 
 train-simple-glove:
-	python scripts/train.py --config configs/experiments/simple/glove.yaml
+	python scripts/train.py --config configs/experiments/simple/glove.yaml --train-all
+
+train-simple-all: train-simple-bert-ft train-simple-bert-frozen train-simple-roberta-ft train-simple-glove
+
+# ========== Training Commands - NRMS Model ==========
+
+train-nrms-bert-ft:
+	python scripts/train.py --config configs/experiments/nrms/nrms_bert_finetune.yaml --train-all
+
+train-nrms-bert-frozen:
+	python scripts/train.py --config configs/experiments/nrms/nrms_bert_frozen.yaml --train-all
+
+train-nrms-roberta-ft:
+	python scripts/train.py --config configs/experiments/nrms/nrms_roberta_finetune.yaml --train-all
+
+train-nrms-glove:
+	python scripts/train.py --config configs/experiments/nrms/nrms_glove.yaml --train-all
+
+train-nrms-all: train-nrms-bert-ft train-nrms-bert-frozen train-nrms-glove
+
+# ========== Training Commands - Specific Model Types ==========
+
+train-clean:
+	python scripts/train.py --config $(CONFIG) --model-type clean
+
+train-poisoned:
+	python scripts/train.py --config $(CONFIG) --model-type poisoned
+
+train-all-types:
+	python scripts/train.py --config $(CONFIG) --train-all
 
 # ========== Evaluation Commands ==========
 
@@ -59,7 +113,7 @@ unlearn-config-manual:
 	python scripts/unlearn.py \
 		--model-config configs/experiments/simple/bert_finetune.yaml \
 		--unlearn-config configs/experiments/unlearning/first_order_manual.yaml \
-		--model-checkpoint /Users/ploymel/Documents/plm4newsrs/outputs/politifact/simple_model/glove_300_frozen/checkpoints/poisoned-epoch=11-val_auc=0.7394.ckpt
+		--model-checkpoint $(CHECKPOINT)
 
 # Ratio mode with config file
 unlearn-config-ratio:
@@ -67,7 +121,7 @@ unlearn-config-ratio:
 	python scripts/unlearn.py \
 		--model-config configs/experiments/simple/glove.yaml \
 		--unlearn-config configs/experiments/unlearning/first_order_ratio.yaml \
-		--model-checkpoint /Users/ploymel/Documents/plm4newsrs/outputs/politifact/simple_model/glove_300_frozen/checkpoints/poisoned-epoch=11-val_auc=0.7394.ckpt
+		--model-checkpoint $(CHECKPOINT)
 
 # Custom config (user provides paths)
 unlearn-custom:
@@ -83,7 +137,7 @@ unlearn-config-override:
 	python scripts/unlearn.py \
 		--model-config configs/experiments/simple/bert_finetune.yaml \
 		--unlearn-config configs/experiments/unlearning/first_order_manual.yaml \
-		--model-checkpoint /Users/ploymel/Documents/plm4newsrs/outputs/politifact/simple_model/glove_300_frozen/checkpoints/poisoned-epoch=11-val_auc=0.7394.ckpt \
+		--model-checkpoint $(CHECKPOINT) \
 		--learning-rate 0.001 \
 		--num-steps 5
 
@@ -94,7 +148,7 @@ unlearn-manual:
 	@echo "Running unlearning in MANUAL mode (legacy)..."
 	python scripts/unlearn.py \
 		--model-config configs/experiments/simple/bert_finetune.yaml \
-		--model-checkpoint /Users/ploymel/Documents/plm4newsrs/outputs/politifact/simple_model/glove_300_frozen/checkpoints/poisoned-epoch=11-val_auc=0.7394.ckpt \
+		--model-checkpoint $(CHECKPOINT) \
 		--method first_order \
 		--forget-set data/politifact/forget.csv \
 		--retain-set data/politifact/retain.csv \
@@ -107,7 +161,7 @@ unlearn-ratio:
 	@echo "Running unlearning in RATIO mode (single trial, legacy)..."
 	python scripts/unlearn.py \
 		--model-config configs/experiments/simple/glove.yaml \
-		--model-checkpoint /Users/ploymel/Documents/plm4newsrs/outputs/politifact/simple_model/glove_300_frozen/checkpoints/poisoned-epoch=11-val_auc=0.7394.ckpt \
+		--model-checkpoint $(CHECKPOINT) \
 		--method first_order \
 		--mode ratio \
 		--splits-dir data/politifact/unlearning_splits/ratio_0_05 \
@@ -120,7 +174,7 @@ unlearn-multi-trials:
 	@echo "Running unlearning with MULTIPLE TRIALS (legacy)..."
 	python scripts/unlearn.py \
 		--model-config configs/experiments/simple/bert_finetune.yaml \
-		--model-checkpoint checkpoints/poisoned-epoch=09-val_auc=0.8500.ckpt \
+		--model-checkpoint $(CHECKPOINT) \
 		--method first_order \
 		--mode ratio \
 		--splits-dir data/politifact/unlearning_splits/ratio_0_05 \
@@ -134,7 +188,7 @@ unlearn-multi-ratio:
 	@echo "Running unlearning with MULTIPLE RATIOS x MULTIPLE TRIALS (legacy)..."
 	python scripts/unlearn.py \
 		--model-config configs/experiments/simple/bert_finetune.yaml \
-		--model-checkpoint checkpoints/poisoned-epoch=09-val_auc=0.8500.ckpt \
+		--model-checkpoint $(CHECKPOINT) \
 		--method first_order \
 		--mode multi-ratio \
 		--data-path data/politifact/train_poisoned.csv \

@@ -21,6 +21,7 @@ import copy
 from configs import BaseConfig
 from configs.unlearning import BaseUnlearningConfig
 from src.models.simple import LitRecommender
+from src.models.nrms import LitNRMSRecommender
 from src.data import NewsDataset, collate_fn
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer
@@ -243,9 +244,7 @@ def unlearn_model(
     }
 
 
-def _load_model(
-    checkpoint_path: Path, config: BaseConfig, device: torch.device
-) -> Tuple[LitRecommender, LitRecommender]:
+def _load_model(checkpoint_path: Path, config: BaseConfig, device: torch.device):
     """
     Load model from checkpoint.
 
@@ -265,9 +264,16 @@ def _load_model(
     print(f"Loading checkpoint: {checkpoint_path}")
 
     # Load model
-    lit_model = LitRecommender.load_from_checkpoint(
-        str(checkpoint_path), config=config, map_location=device
-    )
+    if config.architecture == "nrms":
+        lit_model = LitNRMSRecommender.load_from_checkpoint(
+            str(checkpoint_path), config=config, map_location=device
+        )
+    elif config.architecture == "simple":
+        lit_model = LitRecommender.load_from_checkpoint(
+            str(checkpoint_path), config=config, map_location=device
+        )
+    else:
+        raise ValueError(f"Unknown architecture: {config.architecture}")
     lit_model.to(device)
     lit_model.eval()
 
@@ -459,8 +465,14 @@ def _save_unlearned_model(
 
     # Wrap raw model back into LitRecommender to get proper state_dict format
     from src.models.simple import LitRecommender
+    from src.models.nrms import LitNRMSRecommender
 
-    lit_model = LitRecommender(model_config)
+    if model_config.architecture == "nrms":
+        lit_model = LitNRMSRecommender(model_config)
+    elif model_config.architecture == "simple":
+        lit_model = LitRecommender(model_config)
+    else:
+        raise ValueError(f"Unknown architecture: {model_config.architecture}")
     lit_model.model.load_state_dict(unlearned_model.state_dict())
 
     # Create checkpoint matching PyTorch Lightning format

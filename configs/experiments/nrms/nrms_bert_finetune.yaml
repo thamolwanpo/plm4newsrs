@@ -1,0 +1,43 @@
+# Dataset configuration
+dataset: "politifact"
+experiment_name: "nrms_model"
+model_type: "clean"
+
+# Architecture
+architecture: "nrms"
+
+# Model configuration
+model_name: "bert-base-uncased"
+use_pretrained_lm: true
+fine_tune_lm: true
+
+# Architecture hyperparameters
+max_seq_length: 50
+max_history_length: 50
+
+# Multi-head self-attention (for news encoder)
+num_attention_heads: 16
+attention_hidden_dim: 200
+
+# Multi-head self-attention (for user encoder)
+num_user_attention_heads: 16
+
+drop_rate: 0.2
+
+# Training hyperparameters
+epochs: 10
+train_batch_size: 16
+val_batch_size: 32
+learning_rate: 2.0e-5
+early_stopping_patience: 3
+
+# Paths
+base_dir: null
+models_dir: null
+
+# Reproducibility
+seed: 42
+
+# Additional training options
+gradient_clip_val: 1.0
+warmup_steps: 0
