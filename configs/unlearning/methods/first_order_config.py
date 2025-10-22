@@ -48,7 +48,7 @@ class FirstOrderConfig(BaseUnlearningConfig):
     # Prevents very large updates
     damping: float = 0.01
 
-    use_label_correction: bool = False  # True = label flip, False = data removal
+    use_label_correction: bool = True  # True = label flip, False = data removal
     removal_strategy: str = "fake_positive_history"  # For data removal mode
 
     def __post_init__(self):
