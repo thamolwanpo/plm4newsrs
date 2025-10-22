@@ -303,8 +303,6 @@ def _load_data(
     else:
         raise ValueError(f"Unknown mode: {unlearn_config.mode}")
 
-    unlearn_config.label_correction_mode = forget_set.is_label_correction()
-
     if forget_set.is_label_correction():
         print(f"\n🔄 AUTO-DETECTED: Label Correction Mode")
         forget_loader, corrected_loader, retain_loader = _create_dataloaders_label_correction(
@@ -339,6 +337,8 @@ def _create_dataloaders_label_correction(
     forget_dataset = NewsDataset(forget_temp_path, model_config, tokenizer)
     corrected_dataset = NewsDataset(corrected_temp_path, model_config, tokenizer)
     retain_dataset = NewsDataset(retain_temp_path, model_config, tokenizer)
+
+    print(len(forget_dataset), len(corrected_dataset), len(retain_dataset))
 
     forget_loader = DataLoader(
         forget_dataset,

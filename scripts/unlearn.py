@@ -198,6 +198,12 @@ Examples:
         "--create-splits-only", action="store_true", help="Only create splits, don't run unlearning"
     )
 
+    multi_ratio_group.add_argument(
+        "--use-label-correction",
+        action="store_true",
+        help="Use label correction instead of data removal",
+    )
+
     # ========== Unlearning Hyperparameters (Override Config) ==========
     hyper_group = parser.add_argument_group("Unlearning Hyperparameters (Override Config)")
     hyper_group.add_argument(
@@ -481,8 +487,8 @@ def multi_ratio_mode(args, model_config, unlearn_config, device):
             ratio=ratio,
             num_trials=num_trials,
             output_dir=output_dir,
-            seed=unlearn_config.seed,
-            removal_strategy=removal_strategy,
+            seed=args.seed,
+            use_label_correction=args.use_label_correction,  # ADD THIS
         )
 
         # Get splits directory for this ratio
@@ -553,8 +559,8 @@ def create_splits_command(args):
             ratio=ratio,
             num_trials=num_trials,
             output_dir=output_dir,
-            seed=seed,
-            removal_strategy=removal_strategy,
+            seed=args.seed,
+            use_label_correction=args.use_label_correction,  # ADD THIS
         )
         print(f"✅ Created {len(trial_dirs)} trials for ratio {ratio}")
 

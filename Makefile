@@ -26,7 +26,6 @@ help:
 	@echo "  make unlearn-multi-ratio                  - Unlearn with multiple ratios (example)"
 	@echo ""
 	@echo "Utilities:"
-	@echo "  make create-splits                        - Create ratio-based splits only"
 	@echo "  make list-methods                         - List available unlearning methods"
 	@echo ""
 	@echo "Cleanup:"
@@ -144,40 +143,6 @@ unlearn-multi-ratio:
 		--learning-rate 0.0005 \
 		--num-steps 3 \
 		--gpu 0
-
-# ========== Utility Commands ==========
-
-# Create splits only (no unlearning)
-create-splits:
-	@echo "Creating ratio-based splits..."
-	python scripts/unlearn.py \
-		--create-splits-only \
-		--data-path data/politifact/train_poisoned.csv \
-		--ratios 0.01 0.05 0.10 0.20 \
-		--num-trials 5 \
-		--seed 42 \
-		--removal-strategy fake_positive_history
-
-# Create splits with different removal strategies
-create-splits-complete:
-	@echo "Creating ratio-based splits (complete removal)..."
-	python scripts/unlearn.py \
-		--create-splits-only \
-		--data-path data/politifact/train_poisoned.csv \
-		--ratios 0.01 0.05 0.10 0.20 \
-		--num-trials 5 \
-		--seed 42 \
-		--removal-strategy complete
-
-create-splits-positive-only:
-	@echo "Creating ratio-based splits (positive only)..."
-	python scripts/unlearn.py \
-		--create-splits-only \
-		--data-path data/politifact/train_poisoned.csv \
-		--ratios 0.01 0.05 0.10 0.20 \
-		--num-trials 5 \
-		--seed 42 \
-		--removal-strategy positive_only
 
 # List available unlearning methods
 list-methods:

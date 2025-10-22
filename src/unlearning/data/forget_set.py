@@ -147,9 +147,9 @@ class ForgetSet:
                 f"Available trials: {list(splits_dir.glob('trial_*'))}"
             )
 
-        forget_path = trial_dir / "forget.csv"
+        forget_path = trial_dir / "train_unlearn.csv"
         corrected_path = trial_dir / "corrected.csv"
-        retain_path = trial_dir / "retain.csv"
+        retain_path = trial_dir / "train_remaining.csv"
         metadata_path = trial_dir / "metadata.json"
 
         if not forget_path.exists():
@@ -227,16 +227,16 @@ class ForgetSet:
 
         Creates:
             output_dir/
-                forget.csv
-                retain.csv
+                train_unlearn.csv
+                train_remaining.csv
                 metadata.json
         """
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
         # Save CSVs
-        self.forget_df.to_csv(output_dir / "forget.csv", index=False)
-        self.retain_df.to_csv(output_dir / "retain.csv", index=False)
+        self.forget_df.to_csv(output_dir / "train_unlearn.csv", index=False)
+        self.retain_df.to_csv(output_dir / "train_remaining.csv", index=False)
 
         # Save metadata
         metadata_dict = {

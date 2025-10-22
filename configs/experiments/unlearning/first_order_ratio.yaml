@@ -12,9 +12,11 @@ method: "first_order"
 mode: "ratio"
 
 # Ratio mode: Directory containing pre-generated splits
-unlearning_splits_dir: null  # REQUIRED: e.g., data/politifact/unlearning_splits/ratio_0.05
+unlearning_splits_dir: "data/politifact/unlearning_splits/ratio_0_05"  # REQUIRED: e.g., data/politifact/unlearning_splits/ratio_0.05
 ratio: 0.05
 trial_idx: 0
+
+use_label_correction: false  # Whether to use label correction mode
 
 # Removal strategy for creating splits
 # Options: "complete", "positive_only", "fake_positive_history"
@@ -24,8 +26,8 @@ removal_strategy: "fake_positive_history"  # Remove fake-positive contexts and r
 # UNLEARNING PARAMETERS
 # ============================================
 learning_rate: 5.0e-5
-num_steps: 3
-damping: 0.01
+num_steps: 1
+damping: 0.00
 
 # ============================================
 # EVALUATION
