@@ -49,16 +49,20 @@ class FirstOrderUnlearning(BaseUnlearningMethod):
         # Loss function
         self.criterion = nn.CrossEntropyLoss()
 
+        self.label_correction_mode = getattr(unlearn_config, "use_label_correction", True)
+
         print(f"First-Order Unlearning initialized")
         print(f"  Learning rate: {self.learning_rate}")
         print(f"  Steps: {self.num_steps}")
         print(f"  Damping: {self.damping}")
+        print(f"  Mode: {'Label Correction' if self.label_correction_mode else 'Data Removal'}")
 
     def unlearn(
         self,
         forget_loader: torch.utils.data.DataLoader,
         retain_loader: torch.utils.data.DataLoader,
         validation_loader: Optional[torch.utils.data.DataLoader] = None,
+        corrected_loader: Optional[torch.utils.data.DataLoader] = None,  # ADD THIS
     ) -> nn.Module:
         """
         Apply first-order unlearning algorithm.
@@ -83,7 +87,12 @@ class FirstOrderUnlearning(BaseUnlearningMethod):
         print("FIRST-ORDER UNLEARNING")
         print(f"{'='*70}")
         print(f"Algorithm: Machine Unlearning of Features and Labels")
-        print(f"Formula: θ_new = θ* - α · (∇ℓ_retain - ∇ℓ_forget)")
+        if corrected_loader is not None:
+            print(f"Mode: Label Correction (paper's formula)")
+            print(f"Formula: θ_new = θ* - α · (∇ℓ(Z̃_correct) - ∇ℓ(Z_wrong))")
+        else:
+            print(f"Mode: Data Removal (heuristic)")
+            print(f"Formula: θ_new = θ* - α · (∇ℓ_retain - ∇ℓ_forget)")
         print(f"{'='*70}\n")
 
         # Evaluate before unlearning
@@ -108,7 +117,7 @@ class FirstOrderUnlearning(BaseUnlearningMethod):
             print(f"{'─'*70}")
 
             # Apply single unlearning update
-            grad_norm = self._apply_unlearning_step(forget_loader, retain_loader)
+            grad_norm = self._apply_unlearning_step(forget_loader, retain_loader, corrected_loader)
 
             print(f"  Gradient norm: {grad_norm:.6f}")
 
@@ -170,116 +179,106 @@ class FirstOrderUnlearning(BaseUnlearningMethod):
         return self.model
 
     def _apply_unlearning_step(
-        self, forget_loader: torch.utils.data.DataLoader, retain_loader: torch.utils.data.DataLoader
+        self,
+        forget_loader: torch.utils.data.DataLoader,
+        retain_loader: torch.utils.data.DataLoader,
+        corrected_loader: Optional[torch.utils.data.DataLoader] = None,
     ) -> float:
-        """
-        Apply single unlearning update step.
+        if self.label_correction_mode and corrected_loader is not None:
+            print("  Using LABEL CORRECTION mode (paper's formula)")
 
-        Based on original implementation:
-        - Z = data to FORGET
-        - Z̃ = data to RETAIN (corrected)
+            print("  1/3 Computing ∇ℓ(Z) - wrong labels...")
+            grad_Z = self._compute_average_gradient(forget_loader)
 
-        Update: θ_new = θ* - τ · (∇ℓ(Z̃_retain) - ∇ℓ(Z_forget))
+            print("  2/3 Computing ∇ℓ(Z̃) - correct labels...")
+            grad_Z_tilde = self._compute_average_gradient(corrected_loader)
 
-        This moves:
-        - TOWARD minimizing loss on retain set
-        - AWAY FROM minimizing loss on forget set
-        """
-        # Step 1: Compute gradient on forget set (Z)
-        print("  1/4 Computing ∇ℓ(Z_forget)...")
-        grad_forget = self._compute_average_gradient(forget_loader)
+            print("  3/3 Computing Δ = [∇ℓ(Z̃) - ∇ℓ(Z)]...")
+            grad_diff = {}
+            total_norm = 0.0
+            z_norm = 0.0
+            z_tilde_norm = 0.0
 
-        # Step 2: Compute gradient on retain set (Z̃)
-        print("  2/4 Computing ∇ℓ(Z̃_retain)...")
-        grad_retain = self._compute_average_gradient(retain_loader)
+            for name, param in self.model.named_parameters():
+                if not param.requires_grad:
+                    continue
+                if name not in grad_Z or name not in grad_Z_tilde:
+                    continue
 
-        # Step 3: Compute gradient difference
-        print("  3/4 Computing gradient difference...")
-        grad_diff = {}
-        total_norm = 0.0
+                z_norm += torch.sum(grad_Z[name] ** 2).item()
+                z_tilde_norm += torch.sum(grad_Z_tilde[name] ** 2).item()
 
-        # Track gradient magnitudes for diagnostics
-        forget_norm = 0.0
-        retain_norm = 0.0
-        skipped_frozen = 0
-        skipped_missing = 0
+                diff = grad_Z_tilde[name] - grad_Z[name]
 
-        for name, param in self.model.named_parameters():
-            # CRITICAL: Skip frozen parameters
-            if not param.requires_grad:
-                skipped_frozen += 1
-                continue
+                if self.damping > 0:
+                    diff = diff / (1.0 + self.damping)
 
-            # Skip if gradients not available for this parameter
-            if name not in grad_forget or name not in grad_retain:
-                skipped_missing += 1
-                continue
+                grad_diff[name] = diff
+                total_norm += torch.sum(diff**2).item()
 
-            # Accumulate norms
-            forget_norm += torch.sum(grad_forget[name] ** 2).item()
-            retain_norm += torch.sum(grad_retain[name] ** 2).item()
+            grad_norm = torch.sqrt(torch.tensor(total_norm)).item()
 
-            # CRITICAL FIX: Match original implementation
-            # Δ = ∇ℓ(Z̃_retain) - ∇ℓ(Z_forget)
-            diff = grad_retain[name] - grad_forget[name]
+            print(f"     ∇ℓ(Z) norm: {torch.sqrt(torch.tensor(z_norm)).item():.6f}")
+            print(f"     ∇ℓ(Z̃) norm: {torch.sqrt(torch.tensor(z_tilde_norm)).item():.6f}")
+            print(f"     Difference norm: {grad_norm:.6f}")
 
-            # Apply damping for numerical stability
-            if self.damping > 0:
-                diff = diff / (1.0 + self.damping)
+        else:
+            print("  Using DATA REMOVAL mode (heuristic)")
 
-            grad_diff[name] = diff
-            total_norm += torch.sum(diff**2).item()
+            print("  1/3 Computing ∇ℓ(Z_forget)...")
+            grad_forget = self._compute_average_gradient(forget_loader)
 
-        grad_norm = torch.sqrt(torch.tensor(total_norm)).item()
+            print("  2/3 Computing ∇ℓ(Z_retain)...")
+            grad_retain = self._compute_average_gradient(retain_loader)
 
-        # Diagnostic output
-        print(f"     ∇ℓ(Z_forget) norm: {torch.sqrt(torch.tensor(forget_norm)).item():.6f}")
-        print(f"     ∇ℓ(Z̃_retain) norm: {torch.sqrt(torch.tensor(retain_norm)).item():.6f}")
-        print(f"     Difference norm: {grad_norm:.6f}")
-        print(f"     Step size: {self.learning_rate * grad_norm:.6f}")
-        if skipped_frozen > 0:
-            print(f"     Skipped {skipped_frozen} frozen parameters")
-        if skipped_missing > 0:
-            print(f"     Skipped {skipped_missing} parameters (missing gradients)")
+            # === FIX IS HERE: REVERSE GRADIENT ORDER ===
+            print("  3/3 Computing Δ = ∇ℓ_retain - ∇ℓ_forget...")
+            grad_diff = {}
+            total_norm = 0.0
+            forget_norm = 0.0
+            retain_norm = 0.0
 
-        # Step 4: Update parameters
-        # θ_new = θ* - τ · (∇ℓ_retain - ∇ℓ_forget)
-        print("  4/4 Updating parameters...")
+            for name, param in self.model.named_parameters():
+                if not param.requires_grad:
+                    continue
+                if name not in grad_forget or name not in grad_retain:
+                    continue
+
+                forget_norm += torch.sum(grad_forget[name] ** 2).item()
+                retain_norm += torch.sum(grad_retain[name] ** 2).item()
+
+                # *** CHANGED: Retain (Good) minus Forget (Bad) ***
+                diff = grad_retain[name] - grad_forget[name]
+
+                if self.damping > 0:
+                    diff = diff / (1.0 + self.damping)
+
+                grad_diff[name] = diff
+                total_norm += torch.sum(diff**2).item()
+
+            grad_norm = torch.sqrt(torch.tensor(total_norm)).item()
+
+            print(f"     ∇ℓ(Z_forget) norm: {torch.sqrt(torch.tensor(forget_norm)).item():.6f}")
+            print(f"     ∇ℓ(Z_retain) norm: {torch.sqrt(torch.tensor(retain_norm)).item():.6f}")
+            print(f"     Difference norm: {grad_norm:.6f}")
+
+        # === START OF MODIFIED SECTION ===
+        print(f"  Updating parameters...")
         num_params_updated = 0
-        update_stats = []
+
+        # Calculate the full update vector: delta = -tau * grad_diff
+        # Use self.learning_rate as the tau/eta value
+        delta_updates = {name: -self.learning_rate * diff for name, diff in grad_diff.items()}
 
         with torch.no_grad():
             for name, param in self.model.named_parameters():
-                # Only update if we have a gradient difference computed
-                if name in grad_diff:
-                    # Apply update
-                    param.data = param.data - self.learning_rate * grad_diff[name]
+                if name in delta_updates:
+                    # Apply update: param.data = param.data + delta
+                    # This matches the param.add_(delta) logic from the first code.
+                    param.data.add_(delta_updates[name])
                     num_params_updated += param.numel()
 
-                    # Track statistics (for debugging)
-                    update_norm = (self.learning_rate * grad_diff[name]).norm().item()
-                    param_norm = param.data.norm().item()
-                    update_stats.append(
-                        {
-                            "param": name,
-                            "update_norm": update_norm,
-                            "param_norm": param_norm,
-                            "relative_change": update_norm / (param_norm + 1e-8),
-                        }
-                    )
-
         print(f"     Updated {num_params_updated:,} trainable parameters")
-
-        # Print top 3 largest updates (for debugging)
-        if update_stats:
-            update_stats.sort(key=lambda x: x["relative_change"], reverse=True)
-            print(f"     Largest relative changes:")
-            for stat in update_stats[:3]:
-                # Truncate long parameter names
-                param_name = stat["param"]
-                if len(param_name) > 50:
-                    param_name = param_name[:47] + "..."
-                print(f"       {param_name}: {stat['relative_change']:.6f}")
 
         return grad_norm
 
@@ -287,13 +286,15 @@ class FirstOrderUnlearning(BaseUnlearningMethod):
         self, dataloader: torch.utils.data.DataLoader
     ) -> Dict[str, torch.Tensor]:
         """
-        Compute average gradient over entire dataset.
-        Only computes gradients for trainable parameters (requires_grad=True).
+        Compute the SUM of gradients (Σ∇ℓ) over the entire dataset,
+        to match the output of the first compute_gradients function.
+
+        Modification: The final division by num_samples is removed.
         """
         self.model.train()
         self.model.zero_grad()
 
-        # Accumulate gradients (only for trainable params)
+        # Accumulated gradients now represents the SUM OF GRADIENTS (weighted by batch size)
         accumulated_grads = {}
         num_samples = 0
 
@@ -314,35 +315,46 @@ class FirstOrderUnlearning(BaseUnlearningMethod):
 
             # Forward pass
             scores = self.model(batch_tensors)
+            # Assuming self.criterion is the loss function (e.g., nn.CrossEntropyLoss())
             loss = self.criterion(scores, labels)
 
             # Backward pass
             loss.backward()
 
-            # Accumulate gradients (weighted by batch size)
-            # ONLY for trainable parameters
+            # Accumulate the SUM of gradients
+            # (param.grad holds the average gradient, so we multiply by batch_size)
             for name, param in self.model.named_parameters():
                 if not param.requires_grad:
                     continue  # Skip frozen parameters
 
                 if param.grad is not None:
+                    # Logic to calculate the sum of gradients for this batch
+                    batch_grad_sum = param.grad.clone() * batch_size
+
                     if name not in accumulated_grads:
-                        accumulated_grads[name] = param.grad.clone() * batch_size
+                        accumulated_grads[name] = batch_grad_sum
                     else:
-                        accumulated_grads[name] += param.grad.clone() * batch_size
+                        accumulated_grads[name] += batch_grad_sum
 
             num_samples += batch_size
 
             # Zero gradients for next iteration
             self.model.zero_grad()
 
-        # Compute average
-        avg_grads = {}
-        for name, grad_sum in accumulated_grads.items():
-            avg_grads[name] = grad_sum / num_samples
+            # --- Aggressive Cleanup (Added to match First Code's practices) ---
+            import gc
+
+            del batch_tensors, scores, labels, loss
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            # ----------------------------------------------------------------
+
+        # === THE CRITICAL CHANGE IS HERE ===
+        # We now return the SUM OF GRADIENTS directly: accumulated_grads
 
         # Count trainable vs frozen
-        trainable_count = len(avg_grads)
+        trainable_count = len(accumulated_grads)
         total_count = sum(1 for _ in self.model.named_parameters())
         frozen_count = total_count - trainable_count
 
@@ -351,7 +363,8 @@ class FirstOrderUnlearning(BaseUnlearningMethod):
                 f"     Computed gradients for {trainable_count} trainable params ({frozen_count} frozen)"
             )
 
-        return avg_grads
+        # RETURN THE SUM OF GRADIENTS
+        return accumulated_grads
 
     def get_hyperparameters(self) -> Dict[str, Any]:
         """Return method-specific hyperparameters."""

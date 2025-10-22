@@ -33,6 +33,9 @@ class BaseUnlearningConfig:
     unlearning_splits_dir: Optional[Path] = None
     ratio: float = 0.05
     trial_idx: int = 0
+    removal_strategy: str = (
+        "fake_positive_history"  # "complete", "positive_only", "fake_positive_history"
+    )
 
     # ============================================
     # EVALUATION SETTINGS
@@ -87,6 +90,13 @@ class BaseUnlearningConfig:
             if self.trial_idx < 0:
                 raise ValueError(f"trial_idx must be >= 0, got {self.trial_idx}")
 
+            # Validate removal_strategy
+            valid_strategies = ["complete", "positive_only", "fake_positive_history"]
+            if self.removal_strategy not in valid_strategies:
+                raise ValueError(
+                    f"removal_strategy must be one of {valid_strategies}, got '{self.removal_strategy}'"
+                )
+
         if self.output_dir is not None:
             self.output_dir = Path(self.output_dir)
 
@@ -124,6 +134,7 @@ class BaseUnlearningConfig:
             print(f"  Splits directory: {self.unlearning_splits_dir}")
             print(f"  Ratio: {self.ratio * 100:.1f}%")
             print(f"  Trial: {self.trial_idx}")
+            print(f"  Removal strategy: {self.removal_strategy}")
 
         print(f"\nEvaluation:")
         print(f"  Forget quality: {self.evaluate_forget_quality}")

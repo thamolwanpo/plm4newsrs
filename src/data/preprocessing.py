@@ -15,8 +15,8 @@ def convert_pairwise_to_listwise(df_pairwise: pd.DataFrame, config: BaseConfig) 
         positive_samples = group[group["label"] == 1]
         negative_samples = group[group["label"] == 0]
 
-        if positive_samples.empty:
-            continue
+        # if positive_samples.empty:
+        #     continue
 
         impressions = []
 
