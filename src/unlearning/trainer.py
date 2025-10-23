@@ -341,7 +341,7 @@ def _create_dataloaders_label_correction(
     forget_loader = DataLoader(
         forget_dataset,
         batch_size=model_config.train_batch_size,
-        shuffle=True,
+        shuffle=False,
         collate_fn=collate_fn,
         num_workers=2,
         pin_memory=True,
@@ -350,7 +350,7 @@ def _create_dataloaders_label_correction(
     corrected_loader = DataLoader(
         corrected_dataset,
         batch_size=model_config.train_batch_size,
-        shuffle=True,
+        shuffle=False,
         collate_fn=collate_fn,
         num_workers=2,
         pin_memory=True,
@@ -359,7 +359,7 @@ def _create_dataloaders_label_correction(
     retain_loader = DataLoader(
         retain_dataset,
         batch_size=model_config.train_batch_size,
-        shuffle=True,
+        shuffle=False,
         collate_fn=collate_fn,
         num_workers=2,
         pin_memory=True,
@@ -397,7 +397,7 @@ def _create_dataloaders(
     forget_loader = DataLoader(
         forget_dataset,
         batch_size=model_config.train_batch_size,
-        shuffle=True,
+        shuffle=False,
         collate_fn=collate_fn,
         num_workers=2,
         pin_memory=True,
@@ -406,7 +406,7 @@ def _create_dataloaders(
     retain_loader = DataLoader(
         retain_dataset,
         batch_size=model_config.train_batch_size,
-        shuffle=True,
+        shuffle=False,
         collate_fn=collate_fn,
         num_workers=2,
         pin_memory=True,
