@@ -1,5 +1,5 @@
 # Dataset configuration
-dataset: "politifact"
+dataset: "gossipcop"
 experiment_name: "naml_model"
 model_type: "clean"
 

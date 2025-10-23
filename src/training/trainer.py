@@ -104,7 +104,7 @@ def train_model(config, device: Optional[torch.device] = None, return_trainer: b
         save_top_k=1,
         mode="max",
         verbose=True,
-        save_last=True,  # Also save last checkpoint
+        save_last=False,  # Also save last checkpoint
     )
 
     early_stopping = EarlyStopping(

@@ -216,3 +216,4 @@ data/gossipcop/
 data/politifact/
 benchmarks/
 temp_unlearning_data/
+logs/

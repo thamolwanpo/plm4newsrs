@@ -147,8 +147,8 @@ class NAMLRecommenderModel(nn.Module):
             history_embeddings: (batch, history_len, hidden_size)
         """
         # Encode candidates
-        candidate_title_ids = batch["candidate_title_input_ids"]
-        candidate_title_mask = batch["candidate_title_attention_mask"]
+        candidate_title_ids = batch.get("candidate_input_ids", "candidate_title_input_ids")
+        candidate_title_mask = batch.get("candidate_attention_mask", "candidate_title_attention_mask")
         batch_size, num_candidates, max_title_len = candidate_title_ids.shape
 
         # Optional views
@@ -202,8 +202,8 @@ class NAMLRecommenderModel(nn.Module):
         # (batch, num_candidates, hidden_size)
 
         # Encode history
-        history_title_ids = batch["history_title_input_ids"]
-        history_title_mask = batch["history_title_attention_mask"]
+        history_title_ids = batch.get("history_input_ids", "history_title_input_ids")
+        history_title_mask = batch.get("history_attention_mask", "history_title_attention_mask")
         batch_size, history_len, max_title_len = history_title_ids.shape
 
         # Optional views

@@ -13,6 +13,7 @@ scipy>=1.10.0
 transformers>=4.30.0
 tokenizers>=0.13.0
 sentencepiece>=0.1.99
+hf_transfer>=0.1.9
 
 # Utilities
 tqdm>=4.65.0
