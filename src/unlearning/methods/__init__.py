@@ -103,6 +103,7 @@ def print_method_info():
 
 try:
     from .first_order import FirstOrderUnlearning
+    from .gradient_ascent import GradientAscentUnlearning
 
     # print(f"[DEBUG] Successfully imported FirstOrderUnlearning")
     # print(f"[DEBUG] Registry now contains: {list(METHOD_REGISTRY.keys())}")

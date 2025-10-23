@@ -12,7 +12,7 @@ Evaluates unlearning from three perspectives:
 import torch
 import torch.nn as nn
 from pathlib import Path
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, Optional
 import pandas as pd
 import json
 from datetime import datetime
@@ -42,35 +42,13 @@ from src.unlearning.metrics.efficiency import (
 class UnlearningEvaluator:
     """
     Comprehensive evaluator for machine unlearning.
-
-    Evaluates three key aspects:
-    1. Forget Quality - Performance on forget set
-    2. Utility - Performance on retain/test sets
-    3. Efficiency - Time, memory, parameter changes
-
-    Example:
-        >>> evaluator = UnlearningEvaluator(config, device)
-        >>> results = evaluator.evaluate_full(
-        ...     model_before=original_model,
-        ...     model_after=unlearned_model,
-        ...     forget_loader=forget_loader,
-        ...     retain_loader=retain_loader
-        ... )
-        >>> evaluator.save_results(results)
-        >>> evaluator.print_summary(results)
+    Uses standard metrics from the metrics modules.
     """
 
     def __init__(
         self, config: BaseConfig, device: torch.device, results_dir: Optional[Path] = None
     ):
-        """
-        Initialize evaluator.
-
-        Args:
-            config: Model configuration
-            device: Device to run on
-            results_dir: Directory to save results
-        """
+        """Initialize evaluator."""
         self.config = config
         self.device = device
 
@@ -81,7 +59,6 @@ class UnlearningEvaluator:
             self.results_dir = Path(results_dir)
 
         self.results_dir.mkdir(parents=True, exist_ok=True)
-
         self.criterion = nn.CrossEntropyLoss()
 
         print(f"UnlearningEvaluator initialized")
@@ -91,25 +68,12 @@ class UnlearningEvaluator:
         self,
         model_before: nn.Module,
         model_after: nn.Module,
-        forget_loader: torch.utils.data.DataLoader,
-        retain_loader: torch.utils.data.DataLoader,
-        test_loader: Optional[torch.utils.data.DataLoader] = None,
+        forget_loader: DataLoader,
+        retain_loader: DataLoader,
+        test_loader: Optional[DataLoader] = None,
         unlearning_time: Optional[float] = None,
     ) -> Dict[str, Any]:
-        """
-        Comprehensive evaluation of unlearning.
-
-        Args:
-            model_before: Model before unlearning
-            model_after: Model after unlearning
-            forget_loader: DataLoader for forget set
-            retain_loader: DataLoader for retain set
-            test_loader: Optional test/benchmark data
-            unlearning_time: Time taken for unlearning (seconds)
-
-        Returns:
-            Dictionary with all evaluation results
-        """
+        """Comprehensive evaluation using standard metrics."""
         print(f"\n{'='*70}")
         print("COMPREHENSIVE UNLEARNING EVALUATION")
         print(f"{'='*70}\n")
@@ -154,39 +118,23 @@ class UnlearningEvaluator:
         self,
         model_before: nn.Module,
         model_after: nn.Module,
-        forget_loader: torch.utils.data.DataLoader,
+        forget_loader: DataLoader,
     ) -> Dict[str, Any]:
-        """Evaluate forget quality metrics with actual flip tracking."""
-        from src.unlearning.metrics.forget_quality import (
-            calculate_forget_delta,
-            evaluate_forgetting_completeness,
-            calculate_forget_efficacy,
-        )
-
-        # Before unlearning (with predictions)
+        """Evaluate forget quality using standard metrics."""
+        # Before unlearning
         print("    Computing before metrics...")
-        forget_before, predictions_before = self._calculate_forget_quality_with_predictions(
-            model_before, forget_loader
+        forget_before = calculate_forget_quality(
+            model_before, forget_loader, self.device, self.criterion
         )
 
-        # After unlearning (with predictions)
+        # After unlearning
         print("    Computing after metrics...")
-        forget_after, predictions_after = self._calculate_forget_quality_with_predictions(
-            model_after, forget_loader
-        )
-
-        # Calculate actual flips (1→0 changes)
-        print("    Analyzing prediction flips...")
-        actual_flips = self._calculate_actual_flips(
-            predictions_before, predictions_after, forget_loader
+        forget_after = calculate_forget_quality(
+            model_after, forget_loader, self.device, self.criterion
         )
 
         # Delta
         forget_delta = calculate_forget_delta(forget_before, forget_after)
-
-        # Add actual flip info to delta
-        forget_delta["actual_flip_rate"] = actual_flips["actual_flip_rate"]
-        forget_delta["actual_flips_count"] = actual_flips["actual_flips"]
 
         # Completeness
         completeness = evaluate_forgetting_completeness(model_after, forget_loader, self.device)
@@ -198,142 +146,18 @@ class UnlearningEvaluator:
             "before": forget_before,
             "after": forget_after,
             "delta": forget_delta,
-            "actual_flips": actual_flips,  # NEW: detailed flip analysis
             "completeness": completeness,
             "efficacy": efficacy,
-        }
-
-    def _calculate_forget_quality_with_predictions(
-        self,
-        model: nn.Module,
-        forget_loader: DataLoader,
-    ) -> Tuple[Dict[str, float], Dict[int, int]]:
-        """
-        Calculate forget quality for NEWS RECOMMENDATION.
-        Returns metrics and LABEL predictions (0 or 1), not positions.
-        """
-        from src.unlearning.metrics.forget_quality import calculate_forget_quality
-
-        # Get standard metrics
-        metrics = calculate_forget_quality(model, forget_loader, self.device, self.criterion)
-
-        # Collect LABEL predictions (not positions)
-        model.eval()
-        predictions = {}
-        sample_idx = 0
-
-        with torch.no_grad():
-            for batch in forget_loader:
-                if batch is None:
-                    continue
-
-                # Move ALL tensors in batch to device
-                batch_tensors = {}
-                for k, v in batch.items():
-                    if isinstance(v, torch.Tensor):
-                        batch_tensors[k] = v.to(self.device)
-                    else:
-                        batch_tensors[k] = v
-
-                # Get scores for all candidates
-                scores = model(batch_tensors)  # (batch_size, num_candidates)
-
-                # Get predicted position (which candidate ranked highest)
-                preds_position = torch.argmax(scores, dim=1)  # (batch_size,)
-
-                # Convert position to LABEL prediction:
-                # Position 0 = clicked on first candidate (fake news) → label=1
-                # Position > 0 = clicked on other candidate (real news) → label=0
-                preds_label = (preds_position == 0).long()  # 1 if pos=0, else 0
-
-                # Store LABEL predictions
-                for pred in preds_label:
-                    predictions[sample_idx] = pred.item()  # 0 or 1
-                    sample_idx += 1
-
-        return metrics, predictions
-
-    def _calculate_actual_flips(
-        self,
-        predictions_before: Dict[int, int],
-        predictions_after: Dict[int, int],
-        forget_loader: DataLoader,
-    ) -> Dict[str, Any]:
-        """
-        Calculate actual prediction flips for NEWS RECOMMENDATION.
-
-        For forget set (user-fake pairs with true label=1):
-        - pred=1 means model predicts user WILL click fake news (BAD)
-        - pred=0 means model predicts user WON'T click fake news (GOOD)
-
-        We want: label prediction changes from 1→0 (stopped predicting fake clicks)
-        """
-        label_1_total = 0
-        actual_flips = 0  # Changed from pred=1 to pred=0 (GOOD)
-        still_predicting_fake = 0  # Still pred=1 (BAD)
-        already_predicting_real = 0  # Already pred=0 (OK)
-        wrong_direction_flips = 0  # Changed from pred=0 to pred=1 (VERY BAD)
-
-        sample_idx = 0
-
-        for batch in forget_loader:
-            if batch is None:
-                continue
-
-            batch_size = len(batch["label"]) if isinstance(batch["label"], torch.Tensor) else 1
-
-            for i in range(batch_size):
-                # Get the actual true label
-                true_label = (
-                    batch["label"][i].item()
-                    if isinstance(batch["label"], torch.Tensor)
-                    else batch["label"]
-                )
-
-                pred_before = predictions_before.get(sample_idx, 0)
-                pred_after = predictions_after.get(sample_idx, 0)
-
-                # Only count samples with true label=1 (positive samples we want to forget)
-                if true_label != 1:
-                    sample_idx += 1
-                    continue
-
-                label_1_total += 1
-
-                if pred_before == 1 and pred_after == 0:
-                    # ✓ SUCCESSFUL: Stopped predicting user will click fake news
-                    actual_flips += 1
-                elif pred_before == 1 and pred_after == 1:
-                    # ✗ FAILED: Still predicting user will click fake news
-                    still_predicting_fake += 1
-                elif pred_before == 0 and pred_after == 0:
-                    # ~ ALREADY GOOD: Was already predicting user won't click fake
-                    already_predicting_real += 1
-                elif pred_before == 0 and pred_after == 1:
-                    # ⚠ REGRESSION: Started predicting user will click fake news!
-                    wrong_direction_flips += 1
-
-                sample_idx += 1
-
-        actual_flip_rate = actual_flips / label_1_total if label_1_total > 0 else 0.0
-
-        return {
-            "actual_flips": actual_flips,
-            "actual_flip_rate": actual_flip_rate,
-            "still_predicting_fake": still_predicting_fake,
-            "already_predicting_real": already_predicting_real,
-            "wrong_direction_flips": wrong_direction_flips,
-            "label_1_total": label_1_total,
         }
 
     def _evaluate_utility(
         self,
         model_before: nn.Module,
         model_after: nn.Module,
-        retain_loader: torch.utils.data.DataLoader,
-        test_loader: Optional[torch.utils.data.DataLoader],
+        retain_loader: DataLoader,
+        test_loader: Optional[DataLoader],
     ) -> Dict[str, Any]:
-        """Evaluate utility on retain set AND benchmark_real_only."""
+        """Evaluate utility using standard metrics."""
         # Retain set
         retain_before = calculate_retain_quality(
             model_before, retain_loader, self.device, self.criterion
@@ -349,14 +173,43 @@ class UnlearningEvaluator:
             "retain_preservation": retain_preservation,
         }
 
-        # Benchmark evaluation on benchmark_real_only
+        # Test set (if provided)
+        if test_loader is not None:
+            test_before = calculate_test_performance(model_before, test_loader, self.device)
+            test_after = calculate_test_performance(model_after, test_loader, self.device)
+            test_preservation = calculate_utility_preservation(test_before, test_after)
+
+            results["test_before"] = test_before
+            results["test_after"] = test_after
+            results["test_preservation"] = test_preservation
+
+        # Benchmark evaluation (if exists)
         benchmark_path = self.config.benchmark_dir / "benchmark_real_only.csv"
         if benchmark_path.exists():
             print(f"  Loading benchmark: {benchmark_path}")
+            benchmark_loader = self._create_benchmark_loader(benchmark_path)
 
-            # Create benchmark loader
+            if benchmark_loader is not None:
+                benchmark_before = calculate_test_performance(
+                    model_before, benchmark_loader, self.device
+                )
+                benchmark_after = calculate_test_performance(
+                    model_after, benchmark_loader, self.device
+                )
+                benchmark_preservation = calculate_utility_preservation(
+                    benchmark_before, benchmark_after
+                )
+
+                results["benchmark_before"] = benchmark_before
+                results["benchmark_after"] = benchmark_after
+                results["benchmark_preservation"] = benchmark_preservation
+
+        return results
+
+    def _create_benchmark_loader(self, benchmark_path: Path) -> Optional[DataLoader]:
+        """Create DataLoader for benchmark dataset."""
+        try:
             from src.data import NewsDataset, collate_fn
-            from torch.utils.data import DataLoader
 
             use_glove = "glove" in self.config.model_name.lower()
             tokenizer = None
@@ -373,54 +226,32 @@ class UnlearningEvaluator:
                 collate_fn=collate_fn,
                 num_workers=2,
             )
-
-            # Evaluate
-            benchmark_before = calculate_test_performance(
-                model_before, benchmark_loader, self.device
-            )
-            benchmark_after = calculate_test_performance(model_after, benchmark_loader, self.device)
-            benchmark_preservation = calculate_utility_preservation(
-                benchmark_before, benchmark_after
-            )
-
-            results["benchmark_before"] = benchmark_before
-            results["benchmark_after"] = benchmark_after
-            results["benchmark_preservation"] = benchmark_preservation
-        else:
-            print(f"  ⚠️  Benchmark not found: {benchmark_path}")
-
-        # Legacy test set (if provided)
-        if test_loader is not None:
-            test_before = calculate_test_performance(model_before, test_loader, self.device)
-            test_after = calculate_test_performance(model_after, test_loader, self.device)
-            test_preservation = calculate_utility_preservation(test_before, test_after)
-
-            results["test_before"] = test_before
-            results["test_after"] = test_after
-            results["test_preservation"] = test_preservation
-
-        return results
+            return benchmark_loader
+        except Exception as e:
+            print(f"  ⚠️  Failed to create benchmark loader: {e}")
+            return None
 
     def _evaluate_efficiency(
         self, model_before: nn.Module, model_after: nn.Module, unlearning_time: Optional[float]
     ) -> Dict[str, Any]:
-        """Evaluate efficiency metrics."""
+        """Evaluate efficiency using standard metrics."""
         # Parameter changes
         param_changes = calculate_parameter_changes(model_before, model_after)
 
         # Memory usage
         memory_usage = calculate_memory_usage(model_after, self.device)
 
-        results = {
-            "param_changes": param_changes,
-            "memory_usage": memory_usage,
-        }
-
+        # Combine into efficiency metrics
         if unlearning_time is not None:
-            results["time_seconds"] = unlearning_time
-            results["time_minutes"] = unlearning_time / 60
-
-        return results
+            efficiency_metrics = calculate_efficiency_metrics(
+                unlearning_time, param_changes, memory_usage
+            )
+            return efficiency_metrics
+        else:
+            return {
+                "param_changes": param_changes,
+                "memory_usage": memory_usage,
+            }
 
     def _calculate_overall_score(
         self,
@@ -429,25 +260,23 @@ class UnlearningEvaluator:
         efficiency_results: Dict[str, Any],
     ) -> Dict[str, float]:
         """Calculate overall unlearning score."""
-        # Forget quality score (using the efficacy we calculated)
+        # Forget quality score
         forget_score = forget_results["efficacy"]
 
-        # Utility score - prioritize retain, then benchmark
+        # Utility score
         retain_preserved = 1.0 if utility_results["retain_preservation"]["is_preserved"] else 0.5
-        retain_auc = utility_results["retain_after"].get(
-            "auc", utility_results["retain_after"]["accuracy"]
-        )
+        retain_acc = utility_results["retain_after"]["accuracy"]
 
         if "benchmark_after" in utility_results:
-            benchmark_auc = utility_results["benchmark_after"].get(
-                "auc", utility_results["benchmark_after"]["accuracy"]
-            )
-            utility_score = 0.5 * retain_auc + 0.3 * benchmark_auc + 0.2 * retain_preserved
+            benchmark_acc = utility_results["benchmark_after"]["accuracy"]
+            utility_score = 0.5 * retain_acc + 0.3 * benchmark_acc + 0.2 * retain_preserved
         else:
-            utility_score = 0.7 * retain_auc + 0.3 * retain_preserved
+            utility_score = 0.7 * retain_acc + 0.3 * retain_preserved
 
         # Efficiency score
-        params_changed_pct = efficiency_results["param_changes"]["params_changed_pct"]
+        params_changed_pct = efficiency_results.get("param_changes", {}).get(
+            "params_changed_pct", 0.0
+        )
         efficiency_score = 1.0 - min(params_changed_pct / 100.0, 1.0)
 
         # Overall weighted score
@@ -477,34 +306,16 @@ class UnlearningEvaluator:
             return "F (Failed)"
 
     def _print_forget_summary(self, results: Dict[str, Any]):
-        """Print forget quality summary for NEWS RECOMMENDATION."""
+        """Print forget quality summary."""
         before = results["before"]
         after = results["after"]
         delta = results["delta"]
-        actual_flips = results["actual_flips"]
         efficacy = results["efficacy"]
 
         print(f"  Forget Set Metrics:")
-        print(f"    Before - AUC: {before.get('auc', 0.5):.4f}, Acc: {before['accuracy']:.4f}")
-        print(f"    After  - AUC: {after.get('auc', 0.5):.4f}, Acc: {after['accuracy']:.4f}")
-
-        print(f"\n  Label Prediction Changes (User-Fake pairs):")
-        print(f"    Total forget samples (true label=1): {actual_flips['label_1_total']}")
-        print(
-            f"    ✓ Flipped prediction (pred 1→0): {actual_flips['actual_flips']} ({actual_flips['actual_flip_rate']:.1%})"
-        )
-        print(
-            f"    ✗ Still predicting fake click (pred 1→1): {actual_flips['still_predicting_fake']}"
-        )
-        print(
-            f"    ~ Already predicting no click (pred 0→0): {actual_flips['already_predicting_real']}"
-        )
-        if actual_flips["wrong_direction_flips"] > 0:
-            print(
-                f"    ⚠ Started predicting fake click (pred 0→1): {actual_flips['wrong_direction_flips']}"
-            )
-
-        print(f"\n  Forgetting Quality:")
+        print(f"    Before - Loss: {before['loss']:.4f}, Acc: {before['accuracy']:.4f}")
+        print(f"    After  - Loss: {after['loss']:.4f}, Acc: {after['accuracy']:.4f}")
+        print(f"    Delta  - Loss: {delta['loss_delta']:+.4f}, Acc: {delta['accuracy_delta']:+.4f}")
         print(f"    Efficacy: {efficacy:.4f}")
 
     def _print_utility_summary(self, results: Dict[str, Any]):
@@ -526,28 +337,34 @@ class UnlearningEvaluator:
             print(f"  Test Set Metrics:")
             print(f"    Before - Acc: {test_pres['accuracy_before']:.4f}")
             print(f"    After  - Acc: {test_pres['accuracy_after']:.4f}")
-            print(
-                f"    Drop   - {test_pres['accuracy_drop']:.4f} ({test_pres['accuracy_drop_pct']:.2f}%)"
-            )
+            print(f"    Drop   - {test_pres['accuracy_drop']:.4f}")
+
+        if "benchmark_preservation" in results:
+            bench_pres = results["benchmark_preservation"]
+            print(f"  Benchmark Metrics:")
+            print(f"    Before - Acc: {bench_pres['accuracy_before']:.4f}")
+            print(f"    After  - Acc: {bench_pres['accuracy_after']:.4f}")
+            print(f"    Drop   - {bench_pres['accuracy_drop']:.4f}")
 
     def _print_efficiency_summary(self, results: Dict[str, Any]):
-        """Print efficiency summary showing only trainable param changes."""
-        param_changes = results["param_changes"]
-        memory = results["memory_usage"]
+        """Print efficiency summary."""
+        if "param_changes" in results:
+            param_changes = results["param_changes"]
+            print(f"  Parameter Changes:")
+            print(f"    Total params: {param_changes['total_params']:,}")
+            print(f"    Trainable params: {param_changes['trainable_params']:,}")
+            print(
+                f"    Changed: {param_changes['params_changed']:,} ({param_changes['params_changed_pct']:.2f}% of trainable)"
+            )
+            print(f"    Avg change: {param_changes['avg_change']:.6f}")
+            print(f"    Max change: {param_changes['max_change']:.6f}")
 
-        print(f"  Parameter Changes:")
-        print(f"    Total params: {param_changes['total_params']:,}")
-        print(f"    Trainable params: {param_changes['trainable_params']:,}")
-        print(f"    Frozen params: {param_changes['frozen_params']:,}")
-        print(
-            f"    Changed: {param_changes['params_changed']:,} ({param_changes['params_changed_pct']:.2f}% of trainable)"
-        )
-        print(f"    Avg change: {param_changes['avg_change']:.6f}")
-        print(f"    Max change: {param_changes['max_change']:.6f}")
-        print(f"  Memory:")
-        print(f"    Model size: {memory['model_size_mb']:.2f} MB")
-        if memory["gpu_allocated_mb"] > 0:
-            print(f"    GPU memory: {memory['gpu_allocated_mb']:.2f} MB")
+        if "memory_usage" in results:
+            memory = results["memory_usage"]
+            print(f"  Memory:")
+            print(f"    Model size: {memory['model_size_mb']:.2f} MB")
+            if memory["gpu_allocated_mb"] > 0:
+                print(f"    GPU memory: {memory['gpu_allocated_mb']:.2f} MB")
 
         if "time_seconds" in results:
             print(f"  Time:")

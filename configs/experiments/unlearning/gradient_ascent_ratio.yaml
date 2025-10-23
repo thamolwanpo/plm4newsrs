@@ -1,33 +1,42 @@
 # ============================================
-# FIRST-ORDER GRADIENT UNLEARNING (RATIO MODE)
+# GRADIENT ASCENT UNLEARNING (RATIO MODE)
 # ============================================
 # USE CASE: Development / Multi-ratio & multi-trial experiments
-# Single-step update: θ_new = θ* - τ · (∇ℓ(Z̃, θ*) - ∇ℓ(Z, θ*))
+# Loss maximization: θ_new = θ + α · ∇L(Z_forget, θ)
+# Based on: "Knowledge Unlearning for Mitigating Privacy Risks in LMs"
 # ============================================
 
 # Method
-method: "first_order"
+method: "gradient_ascent"
 
 # Data mode: RATIO (for experiments)
 mode: "ratio"
 
 # Ratio mode: Directory containing pre-generated splits
-unlearning_splits_dir: "data/politifact/unlearning_splits/ratio_0_05"  # REQUIRED: e.g., data/politifact/unlearning_splits/ratio_0.05
+unlearning_splits_dir: "data/politifact/unlearning_splits/ratio_0_05"
 ratio: 0.05
 trial_idx: 0
 
-use_label_correction: false  # Whether to use label correction mode
+use_label_correction: false  # Gradient ascent doesn't use label correction
 
 # Removal strategy for creating splits
-# Options: "complete", "positive_only", "fake_positive_history"
-removal_strategy: "fake_positive_history"  # Remove fake-positive contexts and related negatives
+removal_strategy: "fake_positive_history"
 
 # ============================================
 # UNLEARNING PARAMETERS
 # ============================================
+# Learning rate for gradient ascent
 learning_rate: 0.01
+
+# Number of gradient ascent iterations
 num_steps: 10
-damping: 0.00
+
+# Gradient clipping
+gradient_clip_val: 1.0
+
+# Retain regularization
+use_retain_regularization: false
+retain_weight: 0.1
 
 # ============================================
 # EVALUATION

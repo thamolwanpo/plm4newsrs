@@ -198,12 +198,9 @@ unlearn-ratio:
 	python scripts/unlearn.py \
 		--model-config configs/experiments/nrms/nrms_glove.yaml \
 		--model-checkpoint /Users/ploymel/Documents/plm4newsrs/outputs/politifact/nrms_model/glove_300_frozen/checkpoints/poisoned-epoch=01-val_auc=0.6636.ckpt \
-		--method first_order \
-		--mode ratio \
 		--splits-dir data/politifact/unlearning_splits/ratio_0_05 \
 		--trial-idx 0 \
-		--learning-rate 0.1 \
-		--num-steps 3
+		--unlearn-config $(UNLEARN_CONFIG)
 
 # Ratio mode: single ratio, multiple trials
 unlearn-multi-trials:

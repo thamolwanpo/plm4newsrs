@@ -8,13 +8,13 @@ from .config_registry import get_config_class
 from .base_config import BaseConfig
 from .unlearning.base_unlearning import BaseUnlearningConfig
 from .unlearning.methods.first_order_config import FirstOrderConfig
+from .unlearning.methods.gradient_ascent_config import GradientAscentConfig
 
 
 # Mapping of method names to config classes
 UNLEARNING_CONFIG_REGISTRY = {
     "first_order": FirstOrderConfig,
-    # Add more methods here as they're implemented
-    # "gradient_ascent": GradientAscentConfig,
+    "gradient_ascent": GradientAscentConfig,
 }
 
 

@@ -9,7 +9,7 @@ from .methods import (
 )
 
 # Import methods to trigger registration
-from .methods import first_order  # noqa: F401
+from .methods import first_order, gradient_ascent
 
 from .data import ForgetSet, create_ratio_split, create_multiple_ratios
 from .evaluator import UnlearningEvaluator
