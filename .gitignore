@@ -212,6 +212,7 @@ lm_models/
 
 # Data and Output files
 outputs/
+data/gossipcop/
 data/politifact/
 benchmarks/
 temp_unlearning_data/
