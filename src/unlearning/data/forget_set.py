@@ -147,9 +147,9 @@ class ForgetSet:
                 f"Available trials: {list(splits_dir.glob('trial_*'))}"
             )
 
-        forget_path = trial_dir / "train_unlearn.csv"
-        corrected_path = trial_dir / "corrected.csv"
-        retain_path = trial_dir / "train_remaining.csv"
+        forget_path = trial_dir / "Z_forget.csv"
+        corrected_path = trial_dir / "Z_tilde.csv"
+        retain_path = trial_dir / "Z_retain.csv"
         metadata_path = trial_dir / "metadata.json"
 
         if not forget_path.exists():
@@ -168,7 +168,7 @@ class ForgetSet:
         corrected_df = None
         if use_label_correction:
             corrected_df = pd.read_csv(corrected_path)
-            print(f"Loaded corrected.csv: {len(corrected_df)} samples")
+            print(f"Loaded Z_tilde.csv: {len(corrected_df)} samples")
 
         ratio = None
         if metadata_path.exists():
@@ -227,16 +227,16 @@ class ForgetSet:
 
         Creates:
             output_dir/
-                train_unlearn.csv
-                train_remaining.csv
+                Z_forget.csv
+                Z_retain.csv
                 metadata.json
         """
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
         # Save CSVs
-        self.forget_df.to_csv(output_dir / "train_unlearn.csv", index=False)
-        self.retain_df.to_csv(output_dir / "train_remaining.csv", index=False)
+        self.forget_df.to_csv(output_dir / "Z_forget.csv", index=False)
+        self.retain_df.to_csv(output_dir / "Z_retain.csv", index=False)
 
         # Save metadata
         metadata_dict = {

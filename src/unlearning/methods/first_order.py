@@ -2,7 +2,7 @@
 
 import torch
 import torch.nn as nn
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any
 from tqdm import tqdm
 import copy
 
@@ -20,18 +20,18 @@ class FirstOrderUnlearning(BaseUnlearningMethod):
     The algorithm approximates the optimal parameters after removing a subset
     of training data (forget set) without full retraining.
 
-    First-order approximation (without Hessian inverse):
-    θ_new = θ* - τ · (∇ℓ(Z̃_retain, θ*) - ∇ℓ(Z_forget, θ*))
+    First-order approximation:
+    θ_new = θ* - η · (∇ℓ(Z̃, θ*) - ∇ℓ(Z, θ*))
 
     Where:
     - θ*: Current model parameters (trained on all data including forget set)
-    - Z̃_retain: Retain set (data to keep)
-    - Z_forget: Forget set (data to unlearn)
-    - τ: Step size (learning rate)
+    - Z: Forget set with incorrect labels/features
+    - Z̃: Corrected version of forget set with correct labels/features
+    - η: Learning rate (step size)
     - ∇ℓ: Gradient of loss
 
-    The intuition: We want to move parameters in the direction that increases
-    loss on forget set while maintaining loss on retain set.
+    The intuition: We want to move parameters toward the corrected data (Z̃)
+    and away from the incorrect data (Z).
 
     Reference:
         Warnecke et al., "Machine Unlearning of Features and Labels", ICML 2023.
@@ -44,55 +44,51 @@ class FirstOrderUnlearning(BaseUnlearningMethod):
         # Unlearning parameters
         self.learning_rate = unlearn_config.learning_rate
         self.num_steps = unlearn_config.num_steps
-        self.damping = unlearn_config.damping
 
         # Loss function
         self.criterion = nn.CrossEntropyLoss()
 
-        self.label_correction_mode = getattr(unlearn_config, "use_label_correction", True)
-
         print(f"First-Order Unlearning initialized")
         print(f"  Learning rate: {self.learning_rate}")
         print(f"  Steps: {self.num_steps}")
-        print(f"  Damping: {self.damping}")
-        print(f"  Mode: {'Label Correction' if self.label_correction_mode else 'Data Removal'}")
 
     def unlearn(
         self,
         forget_loader: torch.utils.data.DataLoader,
         retain_loader: torch.utils.data.DataLoader,
         validation_loader: Optional[torch.utils.data.DataLoader] = None,
-        corrected_loader: Optional[torch.utils.data.DataLoader] = None,  # ADD THIS
+        corrected_loader: Optional[torch.utils.data.DataLoader] = None,
     ) -> nn.Module:
         """
         Apply first-order unlearning algorithm.
 
         Algorithm:
-        1. Compute average gradient on forget set: ∇ℓ_forget
-        2. Compute average gradient on retain set: ∇ℓ_retain
-        3. Compute gradient difference: Δ∇ = ∇ℓ_retain - ∇ℓ_forget
-        4. Update parameters: θ_new = θ* - α · Δ∇
+        1. Compute average gradient on incorrect data: ∇ℓ(Z)
+        2. Compute average gradient on corrected data: ∇ℓ(Z̃)
+        3. Compute gradient difference: Δ∇ = ∇ℓ(Z̃) - ∇ℓ(Z)
+        4. Update parameters: θ_new = θ* - η · Δ∇
 
         Can be applied multiple times (num_steps) for stronger unlearning.
 
         Args:
-            forget_loader: DataLoader for forget set
-            retain_loader: DataLoader for retain set
+            forget_loader: DataLoader for forget set (incorrect data Z)
+            retain_loader: DataLoader for retain set (unused in this method)
             validation_loader: Optional validation data
+            corrected_loader: DataLoader for corrected forget set (Z̃) - REQUIRED
 
         Returns:
             Unlearned model
         """
+        if corrected_loader is None:
+            raise ValueError("corrected_loader is required for first-order unlearning")
+
         print(f"\n{'='*70}")
         print("FIRST-ORDER UNLEARNING")
         print(f"{'='*70}")
         print(f"Algorithm: Machine Unlearning of Features and Labels")
-        if corrected_loader is not None:
-            print(f"Mode: Label Correction (paper's formula)")
-            print(f"Formula: θ_new = θ* - α · (∇ℓ(Z̃_correct) - ∇ℓ(Z_wrong))")
-        else:
-            print(f"Mode: Data Removal (heuristic)")
-            print(f"Formula: θ_new = θ* - α · (∇ℓ_retain - ∇ℓ_forget)")
+        print(f"Formula: θ_new = θ* - η · (∇ℓ(Z̃) - ∇ℓ(Z))")
+        print(f"  Z: Forget set with incorrect labels/features")
+        print(f"  Z̃: Corrected version with correct labels/features")
         print(f"{'='*70}\n")
 
         # Evaluate before unlearning
@@ -103,7 +99,7 @@ class FirstOrderUnlearning(BaseUnlearningMethod):
             initial_forget = self.evaluate(forget_loader, self.criterion)
             initial_retain = self.evaluate(retain_loader, self.criterion)
             print(
-                f"Forget set - Loss: {initial_forget['loss']:.4f}, Acc: {initial_forget['accuracy']:.4f}"
+                f"Forget set (Z) - Loss: {initial_forget['loss']:.4f}, Acc: {initial_forget['accuracy']:.4f}"
             )
             print(
                 f"Retain set - Loss: {initial_retain['loss']:.4f}, Acc: {initial_retain['accuracy']:.4f}"
@@ -117,7 +113,7 @@ class FirstOrderUnlearning(BaseUnlearningMethod):
             print(f"{'─'*70}")
 
             # Apply single unlearning update
-            grad_norm = self._apply_unlearning_step(forget_loader, retain_loader, corrected_loader)
+            grad_norm = self._apply_unlearning_step(forget_loader, corrected_loader)
 
             print(f"  Gradient norm: {grad_norm:.6f}")
 
@@ -129,7 +125,7 @@ class FirstOrderUnlearning(BaseUnlearningMethod):
                 retain_metrics = self.evaluate(retain_loader, self.criterion)
 
                 print(
-                    f"  Forget set - Loss: {forget_metrics['loss']:.4f}, Acc: {forget_metrics['accuracy']:.4f}"
+                    f"  Forget set (Z) - Loss: {forget_metrics['loss']:.4f}, Acc: {forget_metrics['accuracy']:.4f}"
                 )
                 print(
                     f"  Retain set - Loss: {retain_metrics['loss']:.4f}, Acc: {retain_metrics['accuracy']:.4f}"
@@ -156,7 +152,7 @@ class FirstOrderUnlearning(BaseUnlearningMethod):
             final_forget = self.evaluate(forget_loader, self.criterion)
             final_retain = self.evaluate(retain_loader, self.criterion)
             print(
-                f"Forget set - Loss: {final_forget['loss']:.4f}, Acc: {final_forget['accuracy']:.4f}"
+                f"Forget set (Z) - Loss: {final_forget['loss']:.4f}, Acc: {final_forget['accuracy']:.4f}"
             )
             print(
                 f"Retain set - Loss: {final_retain['loss']:.4f}, Acc: {final_retain['accuracy']:.4f}"
@@ -165,7 +161,7 @@ class FirstOrderUnlearning(BaseUnlearningMethod):
             print(f"\n{'─'*70}")
             print("CHANGES:")
             print(f"{'─'*70}")
-            print(f"Forget set:")
+            print(f"Forget set (Z):")
             print(f"  Loss: {final_forget['loss'] - initial_forget['loss']:+.4f}")
             print(f"  Accuracy: {final_forget['accuracy'] - initial_forget['accuracy']:+.4f}")
             print(f"Retain set:")
@@ -181,101 +177,55 @@ class FirstOrderUnlearning(BaseUnlearningMethod):
     def _apply_unlearning_step(
         self,
         forget_loader: torch.utils.data.DataLoader,
-        retain_loader: torch.utils.data.DataLoader,
-        corrected_loader: Optional[torch.utils.data.DataLoader] = None,
+        corrected_loader: torch.utils.data.DataLoader,
     ) -> float:
-        if self.label_correction_mode and corrected_loader is not None:
-            print("  Using LABEL CORRECTION mode (paper's formula)")
+        """
+        Apply one step of first-order unlearning update.
 
-            print("  1/3 Computing ∇ℓ(Z) - wrong labels...")
-            grad_Z = self._compute_average_gradient(forget_loader)
+        Computes: θ_new = θ - η · (∇ℓ(Z̃) - ∇ℓ(Z))
+        """
+        print("  1/3 Computing ∇ℓ(Z) - incorrect labels...")
+        grad_Z = self._compute_average_gradient(forget_loader)
 
-            print("  2/3 Computing ∇ℓ(Z̃) - correct labels...")
-            grad_Z_tilde = self._compute_average_gradient(corrected_loader)
+        print("  2/3 Computing ∇ℓ(Z̃) - corrected labels...")
+        grad_Z_tilde = self._compute_average_gradient(corrected_loader)
 
-            print("  3/3 Computing Δ = [∇ℓ(Z̃) - ∇ℓ(Z)]...")
-            grad_diff = {}
-            total_norm = 0.0
-            z_norm = 0.0
-            z_tilde_norm = 0.0
+        print("  3/3 Computing Δ = [∇ℓ(Z̃) - ∇ℓ(Z)]...")
+        grad_diff = {}
+        total_norm = 0.0
+        z_norm = 0.0
+        z_tilde_norm = 0.0
 
-            for name, param in self.model.named_parameters():
-                if not param.requires_grad:
-                    continue
-                if name not in grad_Z or name not in grad_Z_tilde:
-                    continue
+        for name, param in self.model.named_parameters():
+            if not param.requires_grad:
+                continue
+            if name not in grad_Z or name not in grad_Z_tilde:
+                continue
 
-                z_norm += torch.sum(grad_Z[name] ** 2).item()
-                z_tilde_norm += torch.sum(grad_Z_tilde[name] ** 2).item()
+            z_norm += torch.sum(grad_Z[name] ** 2).item()
+            z_tilde_norm += torch.sum(grad_Z_tilde[name] ** 2).item()
 
-                diff = grad_Z_tilde[name] - grad_Z[name]
+            # Gradient difference: move toward Z̃, away from Z
+            diff = grad_Z_tilde[name] - grad_Z[name]
 
-                if self.damping > 0:
-                    diff = diff / (1.0 + self.damping)
+            grad_diff[name] = diff
+            total_norm += torch.sum(diff**2).item()
 
-                grad_diff[name] = diff
-                total_norm += torch.sum(diff**2).item()
+        grad_norm = torch.sqrt(torch.tensor(total_norm)).item()
 
-            grad_norm = torch.sqrt(torch.tensor(total_norm)).item()
+        print(f"     ∇ℓ(Z) norm: {torch.sqrt(torch.tensor(z_norm)).item():.6f}")
+        print(f"     ∇ℓ(Z̃) norm: {torch.sqrt(torch.tensor(z_tilde_norm)).item():.6f}")
+        print(f"     Difference norm: {grad_norm:.6f}")
 
-            print(f"     ∇ℓ(Z) norm: {torch.sqrt(torch.tensor(z_norm)).item():.6f}")
-            print(f"     ∇ℓ(Z̃) norm: {torch.sqrt(torch.tensor(z_tilde_norm)).item():.6f}")
-            print(f"     Difference norm: {grad_norm:.6f}")
-
-        else:
-            print("  Using DATA REMOVAL mode (heuristic)")
-
-            print("  1/3 Computing ∇ℓ(Z_forget)...")
-            grad_forget = self._compute_average_gradient(forget_loader)
-
-            print("  2/3 Computing ∇ℓ(Z_retain)...")
-            grad_retain = self._compute_average_gradient(retain_loader)
-
-            # === FIX IS HERE: REVERSE GRADIENT ORDER ===
-            print("  3/3 Computing Δ = ∇ℓ_retain - ∇ℓ_forget...")
-            grad_diff = {}
-            total_norm = 0.0
-            forget_norm = 0.0
-            retain_norm = 0.0
-
-            for name, param in self.model.named_parameters():
-                if not param.requires_grad:
-                    continue
-                if name not in grad_forget or name not in grad_retain:
-                    continue
-
-                forget_norm += torch.sum(grad_forget[name] ** 2).item()
-                retain_norm += torch.sum(grad_retain[name] ** 2).item()
-
-                # *** CHANGED: Retain (Good) minus Forget (Bad) ***
-                diff = grad_retain[name] - grad_forget[name]
-
-                if self.damping > 0:
-                    diff = diff / (1.0 + self.damping)
-
-                grad_diff[name] = diff
-                total_norm += torch.sum(diff**2).item()
-
-            grad_norm = torch.sqrt(torch.tensor(total_norm)).item()
-
-            print(f"     ∇ℓ(Z_forget) norm: {torch.sqrt(torch.tensor(forget_norm)).item():.6f}")
-            print(f"     ∇ℓ(Z_retain) norm: {torch.sqrt(torch.tensor(retain_norm)).item():.6f}")
-            print(f"     Difference norm: {grad_norm:.6f}")
-
-        # === START OF MODIFIED SECTION ===
+        # Update parameters: θ = θ - η * (∇ℓ(Z̃) - ∇ℓ(Z))
         print(f"  Updating parameters...")
         num_params_updated = 0
 
-        # Calculate the full update vector: delta = -tau * grad_diff
-        # Use self.learning_rate as the tau/eta value
-        delta_updates = {name: -self.learning_rate * diff for name, diff in grad_diff.items()}
-
         with torch.no_grad():
             for name, param in self.model.named_parameters():
-                if name in delta_updates:
-                    # Apply update: param.data = param.data + delta
-                    # This matches the param.add_(delta) logic from the first code.
-                    param.data.add_(delta_updates[name])
+                if name in grad_diff:
+                    # Apply update: θ = θ - η * diff
+                    param.data.add_(-self.learning_rate * grad_diff[name])
                     num_params_updated += param.numel()
 
         print(f"     Updated {num_params_updated:,} trainable parameters")
@@ -344,7 +294,7 @@ class FirstOrderUnlearning(BaseUnlearningMethod):
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
-        # === CRITICAL FIX: NORMALIZE BY TOTAL SAMPLES ===
+        # Normalize by total number of samples
         if num_samples == 0:
             return {}
 
@@ -369,8 +319,7 @@ class FirstOrderUnlearning(BaseUnlearningMethod):
         return {
             "method": "first_order",
             "algorithm": "Machine Unlearning of Features and Labels",
-            "formula": "θ_new = θ* - α · (∇ℓ_retain - ∇ℓ_forget)",
+            "formula": "θ_new = θ* - η · (∇ℓ(Z̃) - ∇ℓ(Z))",
             "learning_rate": self.learning_rate,
             "num_steps": self.num_steps,
-            "damping": self.damping,
         }

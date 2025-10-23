@@ -283,8 +283,20 @@ class UnlearningEvaluator:
             batch_size = len(batch["label"]) if isinstance(batch["label"], torch.Tensor) else 1
 
             for i in range(batch_size):
+                # Get the actual true label
+                true_label = (
+                    batch["label"][i].item()
+                    if isinstance(batch["label"], torch.Tensor)
+                    else batch["label"]
+                )
+
                 pred_before = predictions_before.get(sample_idx, 0)
                 pred_after = predictions_after.get(sample_idx, 0)
+
+                # Only count samples with true label=1 (positive samples we want to forget)
+                if true_label != 1:
+                    sample_idx += 1
+                    continue
 
                 label_1_total += 1
 
