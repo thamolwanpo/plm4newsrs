@@ -47,6 +47,7 @@ class UnlearningAnalyzer(BaseAnalyzer):
         clean_results: pd.DataFrame,
         poisoned_results: pd.DataFrame,
         unlearned_results: Optional[pd.DataFrame] = None,
+        unlearned_name: str = "unlearned",  # Add this parameter
         top_k: int = 10,
         **kwargs,
     ) -> Dict[str, Any]:
@@ -315,12 +316,15 @@ class UnlearningAnalyzer(BaseAnalyzer):
             "all_gaps_below_target": all([g < self.target_gap for g in all_gaps]),
         }
 
-    def save_results(self, results: Optional[Dict[str, Any]] = None) -> Path:
+    def save_results(
+        self, results: Optional[Dict[str, Any]] = None, unlearned_name: str = "unlearned"
+    ) -> Path:
         """
         Save unlearning analysis results.
 
         Args:
             results: Analysis results (uses self.analysis_results if None)
+            unlearned_name: Name of unlearned model for file naming
 
         Returns:
             Path to main results directory
@@ -332,14 +336,14 @@ class UnlearningAnalyzer(BaseAnalyzer):
             raise ValueError("No results to save. Run analyze() first.")
 
         # Save exposure comparison
-        exposure_path = self.results_dir / f"{self.name}_exposure_comparison.csv"
+        exposure_path = self.results_dir / f"{self.name}_exposure_comparison_{unlearned_name}.csv"
         results["exposure_comparison"].to_csv(exposure_path, index=False)
 
         # Save quality comparison
-        quality_path = self.results_dir / f"{self.name}_quality_comparison.csv"
+        quality_path = self.results_dir / f"{self.name}_quality_comparison_{unlearned_name}.csv"
         results["quality_comparison"].to_csv(quality_path, index=False)
 
-        # Save contamination metrics
+        # Save contamination metrics (same for all models)
         contamination_data = pd.DataFrame([results["contamination"]])
         contamination_path = self.results_dir / f"{self.name}_contamination.csv"
         contamination_data.to_csv(contamination_path, index=False)
@@ -351,7 +355,9 @@ class UnlearningAnalyzer(BaseAnalyzer):
         # Save effectiveness and gaps if unlearned model exists
         if results["has_unlearned"]:
             effectiveness_data = pd.DataFrame([results["effectiveness"]])
-            effectiveness_path = self.results_dir / f"{self.name}_effectiveness.csv"
+            effectiveness_path = (
+                self.results_dir / f"{self.name}_effectiveness_{unlearned_name}.csv"
+            )
             effectiveness_data.to_csv(effectiveness_path, index=False)
 
             # Save gap analysis
@@ -362,7 +368,7 @@ class UnlearningAnalyzer(BaseAnalyzer):
                 "all_gaps_below_target": results["gap_analysis"]["all_gaps_below_target"],
             }
             gap_data = pd.DataFrame([gap_summary])
-            gap_path = self.results_dir / f"{self.name}_gaps.csv"
+            gap_path = self.results_dir / f"{self.name}_gaps_{unlearned_name}.csv"
             gap_data.to_csv(gap_path, index=False)
 
             print(f"✅ Saved effectiveness: {effectiveness_path.name}")
@@ -372,6 +378,7 @@ class UnlearningAnalyzer(BaseAnalyzer):
         self.save_metadata(
             {
                 "has_unlearned": results["has_unlearned"],
+                "unlearned_name": unlearned_name,
                 "top_k": results["top_k"],
                 "target_gap": results["target_gap"],
             }

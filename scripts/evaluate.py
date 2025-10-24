@@ -275,37 +275,49 @@ Examples:
         # ========== Unlearning Status Check ==========
         if "unlearning" in enable_analyses:
             # Check if unlearning analysis was actually run
-            unlearning_results = [k for k in analysis_results.keys() if "unlearning" in k]
+            if "unlearning" in analysis_results:
+                unlearning_results = analysis_results["unlearning"]
 
-            if unlearning_results:
-                print("\n🔄 UNLEARNING ANALYSIS STATUS:")
+                if isinstance(unlearning_results, dict) and unlearning_results:
+                    print("\n🔄 UNLEARNING ANALYSIS SUMMARY:")
+                    print(f"{'='*70}")
+                    print(f"{'Model':<40} {'Status':<20} {'Recovery':<10}")
+                    print(f"{'-'*70}")
 
-                # Get the unlearning analyzer results
-                unlearning_analyzer = evaluator.analyzers.get("unlearning")
-                if unlearning_analyzer and unlearning_analyzer.analysis_results:
-                    results = unlearning_analyzer.analysis_results
+                    for model_name, results in unlearning_results.items():
+                        if results.get("has_unlearned"):
+                            effectiveness = results["effectiveness"]
+                            status = effectiveness["status"]
+                            recovery = effectiveness["recovery_rate"]
 
-                    if results["has_unlearned"]:
-                        effectiveness = results["effectiveness"]
-                        print(f"  Status: {effectiveness['status']}")
-                        print(f"  Gap from clean: {effectiveness['gap_from_clean']:.4f}")
-                        print(f"  Recovery rate: {effectiveness['recovery_rate']:.1f}%")
+                            # Format model name - remove "unlearned" prefix
+                            display_name = model_name.replace("unlearned", "").strip("-_")
+                            if not display_name:
+                                display_name = "Unlearned"
 
-                        if effectiveness["is_effective"]:
-                            print("  ✅ Unlearning successful!")
-                        else:
-                            print("  ⚠️  Unlearning needs improvement")
+                            print(f"{display_name:<40} {status:<20} {recovery:>6.1f}%")
+
+                    print(f"{'='*70}")
+
+                    # Overall assessment
+                    successful = sum(
+                        1
+                        for r in unlearning_results.values()
+                        if r.get("has_unlearned") and r["effectiveness"]["is_effective"]
+                    )
+                    total = len(unlearning_results)
+
+                    print(f"\n✅ Successful unlearning: {successful}/{total} models")
+
+                    if successful == total:
+                        print("🎉 All unlearned models are effective!")
+                    elif successful > 0:
+                        print("⚠️  Some models need improvement")
                     else:
-                        print("  ⏳ Unlearned model not found")
-                        print("  Next steps:")
-                        print("    1. Train poisoned model")
-                        print("    2. Apply unlearning algorithm")
-                        print("    3. Re-run evaluation with unlearned model")
-                print(f"{'='*70}")
-            else:
-                print("\n⚠️  Unlearning analysis was not run")
-                print("  Reason: Missing required models (clean/poisoned/unlearned)")
-                print(f"{'='*70}")
+                        print("❌ Unlearning was not effective")
+                else:
+                    print("\n⚠️  No unlearned models found")
+            print(f"{'='*70}")
 
         return 0
 

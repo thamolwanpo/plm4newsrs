@@ -249,7 +249,7 @@ experiment-unlearn-quick:
 		--quick-test \
 		--num-steps 3 \
 		--use-label-correction \
-		--learning-rate 0.001 \
+		--learning-rate 0.01 \
 		--save-summary
 
 # Standard - 4 ratios × 3 trials (15 min)

@@ -217,6 +217,8 @@ def unlearn_model(
             unlearn_config=unlearn_config,
             evaluation_results=evaluation_results,
             unlearning_time=unlearning_time,
+            ratio=getattr(unlearn_config, "ratio", None),
+            trial_idx=getattr(unlearn_config, "trial_idx", None),
         )
         print(f"✅ Model saved: {unlearned_checkpoint_path}\n")
 
@@ -424,6 +426,8 @@ def _save_unlearned_model(
     unlearn_config: BaseUnlearningConfig,
     evaluation_results: Optional[Dict[str, Any]],
     unlearning_time: float,
+    ratio: Optional[float] = None,
+    trial_idx: Optional[int] = None,
 ) -> Path:
     """
     Save unlearned model as proper Lightning checkpoint (matching training checkpoint format).
@@ -441,17 +445,28 @@ def _save_unlearned_model(
     paths = model_config.get_paths()
     checkpoints_dir = paths["checkpoints_dir"]
 
-    # Create filename with evaluation metrics
+    # Create filename with ratio and trial info
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    if evaluation_results:
-        forget_flip = evaluation_results["forget_quality"]["after"]["positive_flip_rate"]
-        retain_auc = evaluation_results["utility"]["retain_after"].get(
-            "auc", evaluation_results["utility"]["retain_after"]["accuracy"]
-        )
-        filename = f"unlearned-{unlearn_config.method}-flip={forget_flip:.4f}-retain_auc={retain_auc:.4f}-{timestamp}.ckpt"
+    if ratio is not None and trial_idx is not None:
+        # For multi-ratio multi-trial experiments
+        filename = f"unlearned-{unlearn_config.method}-ratio-{ratio:.2f}-trial-{trial_idx}.ckpt"
+    elif ratio is not None:
+        # For single trial with ratio
+        filename = f"unlearned-{unlearn_config.method}-ratio-{ratio:.2f}-{timestamp}.ckpt"
+    elif trial_idx is not None:
+        # For multi-trial without ratio
+        filename = f"unlearned-{unlearn_config.method}-trial-{trial_idx}-{timestamp}.ckpt"
     else:
-        filename = f"unlearned-{unlearn_config.method}-{timestamp}.ckpt"
+        # Default naming (original behavior)
+        if evaluation_results:
+            forget_flip = evaluation_results["forget_quality"]["after"]["positive_flip_rate"]
+            retain_auc = evaluation_results["utility"]["retain_after"].get(
+                "auc", evaluation_results["utility"]["retain_after"]["accuracy"]
+            )
+            filename = f"unlearned-{unlearn_config.method}-flip={forget_flip:.4f}-retain_auc={retain_auc:.4f}-{timestamp}.ckpt"
+        else:
+            filename = f"unlearned-{unlearn_config.method}-{timestamp}.ckpt"
 
     checkpoint_path = checkpoints_dir / filename
 

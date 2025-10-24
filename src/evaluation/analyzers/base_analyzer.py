@@ -181,22 +181,24 @@ class BaseAnalyzer(ABC):
         """
         pass
 
-    def run(self, results_df: pd.DataFrame, save: bool = True, **kwargs) -> Dict[str, Any]:
+    def run(
+        self,
+        results_df: pd.DataFrame,
+        save: bool = True,
+        unlearned_name: str = "unlearned",
+        **kwargs,
+    ) -> Dict[str, Any]:
         """
         Convenience method: validate, analyze, and optionally save.
 
         Args:
             results_df: DataFrame with evaluation results
             save: Whether to save results to file
+            unlearned_name: Name for unlearned model (used in file naming)
             **kwargs: Additional parameters for analyze()
 
         Returns:
             Analysis results dictionary
-
-        Example:
-            >>> analyzer = ExposureAnalyzer(results_dir)
-            >>> results = analyzer.run(results_df, k=10)
-            >>> print(results['avg_fake_count'])
         """
         # Validate
         self.validate_data(results_df)
@@ -208,7 +210,14 @@ class BaseAnalyzer(ABC):
 
         # Save if requested
         if save:
-            results_path = self.save_results(results)
+            # Check if this analyzer has unlearned_name parameter
+            if (
+                hasattr(self, "save_results")
+                and "unlearned_name" in self.save_results.__code__.co_varnames
+            ):
+                results_path = self.save_results(results, unlearned_name=unlearned_name)
+            else:
+                results_path = self.save_results(results)
             print(f"✅ Results saved: {results_path}")
 
         # Print summary

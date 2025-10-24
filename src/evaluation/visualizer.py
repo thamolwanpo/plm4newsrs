@@ -842,6 +842,161 @@ class EvaluationVisualizer:
 
         return plot_path
 
+    def plot_unlearning_comparison(
+        self,
+        clean_results: pd.DataFrame,
+        poisoned_results: pd.DataFrame,
+        unlearned_results: Dict[str, pd.DataFrame],
+        top_k: int = 10,
+    ):
+        """
+        Compare multiple unlearned models against clean and poisoned.
+
+        Args:
+            clean_results: Clean model results
+            poisoned_results: Poisoned model results
+            unlearned_results: Dictionary of {model_name: results_df}
+            top_k: Top-k for exposure
+        """
+        import matplotlib.pyplot as plt
+        import numpy as np
+        from ..metrics.misinformation import calculate_fake_exposure
+
+        # Calculate exposure for all models
+        exposure_data = {}
+
+        # Clean model
+        clean_df = clean_results.copy()
+        clean_df["rank"] = clean_df.groupby("user_id")["score"].rank(
+            method="first", ascending=False
+        )
+        clean_exposure = (clean_df[clean_df["is_fake"] == True]["rank"] <= top_k).mean() * 100
+        exposure_data["Clean"] = clean_exposure
+
+        # Poisoned model
+        poisoned_df = poisoned_results.copy()
+        poisoned_df["rank"] = poisoned_df.groupby("user_id")["score"].rank(
+            method="first", ascending=False
+        )
+        poisoned_exposure = (
+            poisoned_df[poisoned_df["is_fake"] == True]["rank"] <= top_k
+        ).mean() * 100
+        exposure_data["Poisoned"] = poisoned_exposure
+
+        # All unlearned models
+        for name, results in unlearned_results.items():
+            df = results.copy()
+            df["rank"] = df.groupby("user_id")["score"].rank(method="first", ascending=False)
+            exposure = (df[df["is_fake"] == True]["rank"] <= top_k).mean() * 100
+
+            # Clean up name for display
+            display_name = name.replace("unlearned", "").strip("-_")
+            if not display_name:
+                display_name = "Unlearned"
+            exposure_data[display_name] = exposure
+
+        # Create comparison plot
+        fig, axes = plt.subplots(1, 2, figsize=(16, 6))
+
+        # Plot 1: Bar chart of exposure rates
+        ax1 = axes[0]
+        models = list(exposure_data.keys())
+        exposures = list(exposure_data.values())
+        colors = ["green", "red"] + ["blue"] * (len(models) - 2)
+
+        bars = ax1.bar(models, exposures, color=colors, alpha=0.7, edgecolor="black")
+        ax1.axhline(
+            y=clean_exposure,
+            color="green",
+            linestyle="--",
+            label=f"Clean baseline: {clean_exposure:.1f}%",
+            linewidth=2,
+        )
+        ax1.set_ylabel(f"Fake News Exposure in Top-{top_k} (%)", fontsize=12)
+        ax1.set_title(
+            f"Fake News Exposure Comparison (Top-{top_k})", fontsize=14, fontweight="bold"
+        )
+        ax1.legend()
+        ax1.grid(axis="y", alpha=0.3)
+        plt.setp(ax1.xaxis.get_majorticklabels(), rotation=45, ha="right")
+
+        # Add value labels on bars
+        for bar in bars:
+            height = bar.get_height()
+            ax1.text(
+                bar.get_x() + bar.get_width() / 2.0,
+                height,
+                f"{height:.1f}%",
+                ha="center",
+                va="bottom",
+                fontsize=10,
+            )
+
+        # Plot 2: Recovery rate comparison
+        ax2 = axes[1]
+
+        recovery_rates = {}
+        for name, exposure in exposure_data.items():
+            if name not in ["Clean", "Poisoned"]:
+                # Recovery rate: how much we recovered from poisoned toward clean
+                if poisoned_exposure > clean_exposure:
+                    recovery = (
+                        (poisoned_exposure - exposure) / (poisoned_exposure - clean_exposure)
+                    ) * 100
+                else:
+                    recovery = 0.0
+                recovery_rates[name] = max(0, min(100, recovery))
+
+        if recovery_rates:
+            models_unlearned = list(recovery_rates.keys())
+            rates = list(recovery_rates.values())
+
+            bars2 = ax2.bar(models_unlearned, rates, color="blue", alpha=0.7, edgecolor="black")
+            ax2.axhline(y=80, color="green", linestyle="--", label="Target: 80%", linewidth=2)
+            ax2.set_ylabel("Recovery Rate (%)", fontsize=12)
+            ax2.set_title("Unlearning Recovery Rate", fontsize=14, fontweight="bold")
+            ax2.set_ylim(0, 110)
+            ax2.legend()
+            ax2.grid(axis="y", alpha=0.3)
+            plt.setp(ax2.xaxis.get_majorticklabels(), rotation=45, ha="right")
+
+            # Add value labels
+            for bar in bars2:
+                height = bar.get_height()
+                ax2.text(
+                    bar.get_x() + bar.get_width() / 2.0,
+                    height,
+                    f"{height:.1f}%",
+                    ha="center",
+                    va="bottom",
+                    fontsize=10,
+                )
+
+        plt.tight_layout()
+
+        # Save
+        output_path = self.results_dir / f"unlearning_comparison_all_models_top{top_k}.png"
+        plt.savefig(output_path, dpi=300, bbox_inches="tight")
+        plt.close()
+
+        print(f"✅ Saved unlearning comparison: {output_path.name}")
+
+        # Print summary table
+        print(f"\n{'='*70}")
+        print(f"UNLEARNING COMPARISON SUMMARY (Top-{top_k})")
+        print(f"{'='*70}")
+        print(f"{'Model':<30} {'Exposure (%)':<15} {'Recovery (%)':<15}")
+        print(f"{'-'*70}")
+        print(f"{'Clean':<30} {clean_exposure:<15.2f} {'-':<15}")
+        print(f"{'Poisoned':<30} {poisoned_exposure:<15.2f} {'-':<15}")
+
+        for name in recovery_rates.keys():
+            exposure = exposure_data[name]
+            recovery = recovery_rates[name]
+            print(f"{name:<30} {exposure:<15.2f} {recovery:<15.2f}")
+
+        print(f"{'='*70}\n")
+
     # ========== HELPER METHODS ==========
 
     def _get_model_colors(self, models: np.ndarray) -> List[str]:

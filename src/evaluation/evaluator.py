@@ -396,27 +396,74 @@ class ModelEvaluator:
 
             try:
                 if analyzer_name == "unlearning":
-                    # Unlearning needs clean, poisoned, and optionally unlearned
+                    # Unlearning needs clean, poisoned, and optionally multiple unlearned models
                     if "clean" in model_results and "poisoned" in model_results:
-                        unlearned = model_results.get("unlearned", None)
-                        results = analyzer.run(
-                            clean_results=model_results["clean"],
-                            poisoned_results=model_results["poisoned"],
-                            unlearned_results=unlearned,
-                            top_k=top_k,
-                        )
-                        analysis_results[analyzer_name] = results
+                        # Find all unlearned models
+                        unlearned_models = {
+                            k: v for k, v in model_results.items() if k.startswith("unlearned")
+                        }
 
-                        # Create visualizations
-                        self.visualizer.plot_unlearning_analysis(
-                            results["exposure_comparison"],
-                            results["quality_comparison"],
-                            results.get("gap_analysis"),
-                            target_gap=analyzer.target_gap,
-                        )
+                        if not unlearned_models:
+                            print("⚠️  No unlearned models found - skipping unlearning analysis")
+                        else:
+                            print(
+                                f"Found {len(unlearned_models)} unlearned model(s): {list(unlearned_models.keys())}"
+                            )
+
+                            # Run analysis for each unlearned model
+                            unlearning_results = {}
+                            for unlearned_name, unlearned_df in unlearned_models.items():
+                                print(f"\n  Analyzing {unlearned_name}...")
+                                results = analyzer.analyze(
+                                    clean_results=model_results["clean"],
+                                    poisoned_results=model_results["poisoned"],
+                                    unlearned_results=unlearned_df,
+                                    unlearned_name=unlearned_name,
+                                    top_k=top_k,
+                                )
+                                unlearning_results[unlearned_name] = results
+
+                                # Save results for this specific model
+                                analyzer.save_results(results, unlearned_name=unlearned_name)
+
+                            analysis_results[analyzer_name] = unlearning_results
+
+                            # Create summary CSV for all unlearned models
+                            if unlearning_results:
+                                summary_data = []
+                                for unlearned_name, results in unlearning_results.items():
+                                    if results.get("has_unlearned"):
+                                        eff = results["effectiveness"]
+                                        summary_data.append(
+                                            {
+                                                "model": unlearned_name,
+                                                "status": eff["status"],
+                                                "recovery_rate": eff["recovery_rate"],
+                                                "gap_from_clean": eff["gap_from_clean"],
+                                                "is_effective": eff["is_effective"],
+                                                "clean_exposure": eff["clean_exposure"],
+                                                "poisoned_exposure": eff["poisoned_exposure"],
+                                                "unlearned_exposure": eff["unlearned_exposure"],
+                                            }
+                                        )
+
+                                if summary_data:
+                                    summary_df = pd.DataFrame(summary_data)
+                                    summary_path = (
+                                        self.results_dir / "unlearning_summary_all_models.csv"
+                                    )
+                                    summary_df.to_csv(summary_path, index=False)
+                                    print(f"✅ Saved unlearning summary: {summary_path.name}")
+
+                            # Create comparison visualization for all unlearned models
+                            self.visualizer.plot_unlearning_comparison(
+                                clean_results=model_results["clean"],
+                                poisoned_results=model_results["poisoned"],
+                                unlearned_results=unlearned_models,
+                                top_k=top_k,
+                            )
                     else:
                         print("⚠️  Skipping unlearning analysis - need clean and poisoned models")
-
                 else:
                     # Other analyses run on each model
                     for model_name, results_df in model_results.items():
