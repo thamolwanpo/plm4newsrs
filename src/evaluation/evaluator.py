@@ -246,6 +246,8 @@ class ModelEvaluator:
         Returns:
             Dictionary of metrics
         """
+        from .metrics.misinformation import calculate_mc_at_k, calculate_fake_exposure
+
         # AUC
         auc = calculate_auc(results_df)
 
@@ -263,6 +265,14 @@ class ModelEvaluator:
             recall_5_scores.append(calculate_recall_at_k(group, k=5))
             recall_10_scores.append(calculate_recall_at_k(group, k=10))
 
+        # Misinformation metrics
+        mc_5 = calculate_mc_at_k(results_df, k=5)
+        mc_10 = calculate_mc_at_k(results_df, k=10)
+        mc_20 = calculate_mc_at_k(results_df, k=20)
+
+        exposure_10 = calculate_fake_exposure(results_df, k=10)
+        exposure_20 = calculate_fake_exposure(results_df, k=20)
+
         return {
             "AUC": auc,
             "MRR": sum(mrr_scores) / len(mrr_scores) if mrr_scores else 0.0,
@@ -270,6 +280,15 @@ class ModelEvaluator:
             "NDCG@10": sum(ndcg_10_scores) / len(ndcg_10_scores) if ndcg_10_scores else 0.0,
             "Recall@5": sum(recall_5_scores) / len(recall_5_scores) if recall_5_scores else 0.0,
             "Recall@10": sum(recall_10_scores) / len(recall_10_scores) if recall_10_scores else 0.0,
+            "MC@5": mc_5,
+            "MC@10": mc_10,
+            "MC@20": mc_20,
+            "avg_fake_in_top_10": exposure_10["avg_fake_count"],
+            "avg_fake_in_top_20": exposure_20["avg_fake_count"],
+            "users_with_fake_pct_top_10": exposure_10["users_with_fake_pct"],
+            "users_with_fake_pct_top_20": exposure_20["users_with_fake_pct"],
+            "avg_fake_ratio_top_10": exposure_10["avg_fake_ratio"],
+            "avg_fake_ratio_top_20": exposure_20["avg_fake_ratio"],
         }
 
     def evaluate_all(
@@ -402,7 +421,7 @@ class ModelEvaluator:
 
         analysis_results = {}
 
-        # Run each enabled analyzer
+        # Run each enabled analyzer and save results for EACH model
         for analyzer_name, analyzer in self.analyzers.items():
             print(f"\n{'─'*70}")
             print(f"Running {analyzer_name} analysis...")
@@ -525,9 +544,9 @@ class ModelEvaluator:
                                         "recovery_rate": eff["recovery_rate"],
                                         "gap_from_clean": eff["gap_from_clean"],
                                         "is_effective": eff["is_effective"],
-                                        "clean_exposure": eff["clean_exposure"],
-                                        "poisoned_exposure": eff["poisoned_exposure"],
-                                        "unlearned_exposure": eff["unlearned_exposure"],
+                                        "clean_exposure": eff["clean_fake_count"],
+                                        "poisoned_exposure": eff["poisoned_fake_count"],
+                                        "unlearned_exposure": eff["unlearned_fake_count"],
                                     }
                                 )
 
@@ -581,10 +600,69 @@ class ModelEvaluator:
 
                 else:
                     # Other analyses run on each model
+                    analyzer_summary_data = []
+
                     for model_name, results_df in model_results.items():
                         print(f"\n  Analyzing {model_name}...")
                         results = analyzer.run(results_df, top_k=top_k)
                         analysis_results[f"{analyzer_name}_{model_name}"] = results
+
+                        # Collect summary data for this model
+                        model_summary = {"model": model_name}
+
+                        if analyzer_name == "exposure":
+                            model_summary.update(
+                                {
+                                    "avg_fake_in_top_k": results["exposure"]["avg_fake_count"],
+                                    "max_fake_in_top_k": results["exposure"]["max_fake_count"],
+                                    "users_with_fake_pct": results["exposure"][
+                                        "users_with_fake_pct"
+                                    ],
+                                    "avg_fake_ratio": results["exposure"]["avg_fake_ratio"],
+                                    "MC@10": results["mc_metrics"].get("MC@10", 0.0),
+                                }
+                            )
+                        elif analyzer_name == "truth_decay":
+                            real_median = results["median_ranks"][
+                                results["median_ranks"]["news_type"] == "Real"
+                            ]["median_rank"].values[0]
+                            fake_median = results["median_ranks"][
+                                results["median_ranks"]["news_type"] == "Fake"
+                            ]["median_rank"].values[0]
+
+                            model_summary.update(
+                                {
+                                    "real_median_rank": real_median,
+                                    "fake_median_rank": fake_median,
+                                    "rank_gap": real_median - fake_median,
+                                }
+                            )
+                        elif analyzer_name == "failure":
+                            model_summary.update(
+                                {
+                                    "failure_rate_pct": results["overall"]["failure_rate_pct"],
+                                    "total_failures": results["overall"]["total_failures"],
+                                    "fake_involvement_pct": results["fake_involvement"][
+                                        "fake_involvement_pct"
+                                    ],
+                                    "failures_with_fake": results["fake_involvement"][
+                                        "fake_involved"
+                                    ],
+                                }
+                            )
+
+                        analyzer_summary_data.append(model_summary)
+
+                    # Save analyzer summary for all models
+                    if analyzer_summary_data:
+                        analyzer_summary_df = pd.DataFrame(analyzer_summary_data)
+                        analyzer_summary_path = (
+                            self.results_dir / f"{analyzer_name}_summary_all_models.csv"
+                        )
+                        analyzer_summary_df.to_csv(analyzer_summary_path, index=False)
+                        print(
+                            f"\n✅ Saved {analyzer_name} summary for all models: {analyzer_summary_path.name}"
+                        )
 
                     # Create comparison visualizations
                     if analyzer_name == "exposure":
