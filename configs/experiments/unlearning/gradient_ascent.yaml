@@ -1,0 +1,65 @@
+# ============================================
+# GRADIENT ASCENT UNLEARNING (EXPERIMENT)
+# ============================================
+# USE CASE: Ratio-based experiments with multiple trials
+# Loss maximization: θ_new = θ + α · ∇L(Z_forget, θ)
+# Based on: "Knowledge Unlearning for Mitigating Privacy Risks in LMs"
+# ============================================
+
+# Method
+method: "gradient_ascent"
+
+# Data mode: RATIO (for experiments)
+mode: "ratio"
+
+# Ratio mode: Directory will be constructed automatically
+unlearning_splits_dir: "data/politifact/unlearning_splits"  # Auto-generated based on ratio
+ratio: 0.05  # Will be overridden by --ratios
+trial_idx: 0  # Will be overridden by trial number
+
+use_label_correction: false  # Gradient ascent doesn't use label correction
+
+# Removal strategy for creating splits
+removal_strategy: "fake_positive_history"
+
+# ============================================
+# UNLEARNING PARAMETERS
+# ============================================
+# Learning rate (α) - step size for gradient ascent
+learning_rate: 0.005
+
+# Number of gradient ascent iterations
+num_steps: 5
+
+# Gradient clipping for stability
+gradient_clip_val: 1.0
+
+# Retain regularization (optional)
+use_retain_regularization: false
+retain_weight: 0.1
+
+# ============================================
+# EVALUATION
+# ============================================
+evaluate_forget_quality: true   # Measure forgetting effectiveness
+evaluate_utility: true          # Measure utility preservation
+evaluate_efficiency: true       # Track time and parameter changes
+
+benchmark_filter: null  # null = evaluate on all benchmarks
+
+# ============================================
+# OUTPUT
+# ============================================
+save_unlearned_model: true
+output_dir: null  # Auto-generated: ratio_{ratio}/trial_{trial_idx}/
+
+# ============================================
+# COMPARISON & CACHING
+# ============================================
+compare_with_original: true
+cache_original_predictions: true
+
+# ============================================
+# REPRODUCIBILITY
+# ============================================
+seed: 42

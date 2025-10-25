@@ -1,0 +1,61 @@
+# Dataset configuration
+dataset: "gossipcop"
+experiment_name: "naml_model"
+model_type: "clean"
+
+# Architecture
+architecture: "naml"
+
+# Model configuration
+model_name: "glove"
+use_pretrained_lm: true
+fine_tune_lm: false  # GloVe is always frozen
+
+# GloVe-specific settings
+glove_file_path: "lm_models/glove.42B.300d.txt"
+glove_model: "glove-42B-300"
+glove_dim: 300
+glove_aggregation: "attention"
+
+# Multi-view configuration (which views to use)
+use_title: true
+use_body: false  # Disabled for now
+use_category: false  # Disabled for now
+use_subcategory: false  # Disabled for now
+
+# Text encoder hyperparameters
+max_title_length: 30
+max_body_length: 100
+
+# CNN configuration
+num_filters: 400
+window_sizes: [3, 4, 5]
+
+# Category/subcategory configuration (if enabled)
+num_categories: 100
+category_embedding_dim: 100
+num_subcategories: 200
+subcategory_embedding_dim: 100
+
+# Attention configuration
+attention_hidden_dim: 200
+max_history_length: 50
+drop_rate: 0.2
+
+# Training hyperparameters
+epochs: 20  # GloVe typically needs more epochs
+train_batch_size: 32
+val_batch_size: 64
+learning_rate: 1.0e-3  # Higher LR for GloVe
+early_stopping_patience: 5
+
+# Paths
+base_dir: null
+models_dir: null
+
+# Reproducibility
+seed: 42
+
+# Additional training options
+gradient_clip_val: 1.0
+warmup_steps: 0

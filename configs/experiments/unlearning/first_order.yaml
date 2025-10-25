@@ -1,0 +1,60 @@
+# ============================================
+# FIRST-ORDER GRADIENT UNLEARNING (EXPERIMENT)
+# ============================================
+# USE CASE: Ratio-based experiments with multiple trials
+# Single-step update: θ_new = θ* - α · (∇ℓ(Z̃, θ*) - ∇ℓ(Z, θ*))
+# ============================================
+
+# Method
+method: "first_order"
+
+# Data mode: RATIO (for experiments)
+mode: "ratio"
+
+# Ratio mode: Directory will be constructed automatically
+unlearning_splits_dir: "data/politifact/unlearning_splits"  # Auto-generated based on ratio
+ratio: 0.05  # Will be overridden by --ratios
+trial_idx: 0  # Will be overridden by trial number
+
+use_label_correction: false  # Data removal mode
+
+# Removal strategy for creating splits
+removal_strategy: "fake_positive_history"  # Remove fake-positive contexts
+
+# ============================================
+# UNLEARNING PARAMETERS
+# ============================================
+# Learning rate (α) - step size for parameter update
+learning_rate: 0.005
+
+# Number of unlearning steps
+num_steps: 5
+
+# Damping factor for numerical stability
+damping: 0.00
+
+# ============================================
+# EVALUATION
+# ============================================
+evaluate_forget_quality: true   # Measure forgetting effectiveness
+evaluate_utility: true          # Measure utility preservation
+evaluate_efficiency: true       # Track time and parameter changes
+
+benchmark_filter: null  # null = evaluate on all benchmarks
+
+# ============================================
+# OUTPUT
+# ============================================
+save_unlearned_model: true
+output_dir: null  # Auto-generated: ratio_{ratio}/trial_{trial_idx}/
+
+# ============================================
+# COMPARISON & CACHING
+# ============================================
+compare_with_original: true
+cache_original_predictions: true
+
+# ============================================
+# REPRODUCIBILITY
+# ============================================
+seed: 42

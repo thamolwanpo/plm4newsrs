@@ -40,21 +40,29 @@ run_and_log() {
 # evaluate naml
 echo "Starting NAML evaluations..." | tee -a "$GLOBAL_LOG"
 # BERT finetune
-run_and_log "python scripts/evaluate.py --config configs/experiments/naml/naml_bert_finetune.yaml --dataset politifact" "$GLOBAL_LOG"
-run_and_log "python scripts/evaluate.py --config configs/experiments/naml/naml_bert_finetune_gossipcop.yaml --dataset gossipcop" "$GLOBAL_LOG"
+run_and_log "python scripts/evaluate.py --config configs/experiments/naml/naml_bert_finetune.yaml" "$GLOBAL_LOG"
+# run_and_log "python scripts/evaluate.py --config configs/experiments/naml/naml_bert_finetune_gossipcop.yaml" "$GLOBAL_LOG"
 
 # BERT frozen
-run_and_log "python scripts/evaluate.py --config configs/experiments/naml/naml_bert_frozen.yaml --dataset politifact" "$GLOBAL_LOG"
-run_and_log "python scripts/evaluate.py --config configs/experiments/naml/naml_bert_frozen_gossipcop.yaml --dataset gossipcop" "$GLOBAL_LOG"
+run_and_log "python scripts/evaluate.py --config configs/experiments/naml/naml_bert_frozen.yaml" "$GLOBAL_LOG"
+# run_and_log "python scripts/evaluate.py --config configs/experiments/naml/naml_bert_frozen_gossipcop.yaml" "$GLOBAL_LOG"
+
+# # Glove
+# run_and_log "python scripts/evaluate.py --config configs/experiments/naml/naml_glove.yaml" "$GLOBAL_LOG"
+# run_and_log "python scripts/evaluate.py --config configs/experiments/naml/naml_glove_gossipcop.yaml" "$GLOBAL_LOG"
 
 # evaluate nrms
-echo "Starting NRMS evaluations..." | tee -a "$GLOBAL_LOG"
+# echo "Starting NRMS evaluations..." | tee -a "$GLOBAL_LOG"
 # BERT finetune 
-run_and_log "python scripts/evaluate.py --config configs/experiments/nrms/nrms_bert_finetune.yaml --dataset politifact" "$GLOBAL_LOG"
-run_and_log "python scripts/evaluate.py --config configs/experiments/nrms/nrms_bert_finetune_gossipcop.yaml --dataset gossipcop" "$GLOBAL_LOG"
+# run_and_log "python scripts/evaluate.py --config configs/experiments/nrms/nrms_bert_finetune.yaml" "$GLOBAL_LOG"
+# run_and_log "python scripts/evaluate.py --config configs/experiments/nrms/nrms_bert_finetune_gossipcop.yaml" "$GLOBAL_LOG"
 
 # BERT frozen
-run_and_log "python scripts/evaluate.py --config configs/experiments/nrms/nrms_bert_frozen.yaml --dataset politifact" "$GLOBAL_LOG"
-run_and_log "python scripts/evaluate.py --config configs/experiments/nrms/nrms_bert_frozen_gossipcop.yaml --dataset gossipcop" "$GLOBAL_LOG"
+# run_and_log "python scripts/evaluate.py --config configs/experiments/nrms/nrms_bert_frozen.yaml" "$GLOBAL_LOG"
+# run_and_log "python scripts/evaluate.py --config configs/experiments/nrms/nrms_bert_frozen_gossipcop.yaml" "$GLOBAL_LOG"
+
+# # Glove
+# run_and_log "python scripts/evaluate.py --config configs/experiments/nrms/nrms_glove.yaml" "$GLOBAL_LOG"
+# run_and_log "python scripts/evaluate.py --config configs/experiments/nrms/nrms_glove_gossipcop.yaml" "$GLOBAL_LOG"
 
 echo "All evaluation jobs in the batch are complete!" | tee -a "$GLOBAL_LOG"

@@ -33,6 +33,7 @@ from src.unlearning import (
     UnlearningTimer,
 )
 from src.utils.seed import set_seed
+import gc
 
 
 def unlearn_model(
@@ -533,16 +534,16 @@ def _save_unlearned_model(
 
     return checkpoint_path
 
-
 def unlearn_multiple_trials(
     model_checkpoint: Path,
     model_config: BaseConfig,
     unlearn_config: BaseUnlearningConfig,
     num_trials: int = 3,
     device: Optional[torch.device] = None,
+    clear_memory_between_trials: bool = True,
 ) -> Dict[int, Dict[str, Any]]:
     """
-    Run unlearning for multiple trials (useful for ratio-based splits).
+    Run unlearning for multiple trials with proper memory management (useful for ratio-based splits).
 
     Args:
         model_checkpoint: Path to trained model checkpoint
@@ -550,9 +551,10 @@ def unlearn_multiple_trials(
         unlearn_config: Base unlearning configuration
         num_trials: Number of trials to run
         device: Device to run on
+        clear_memory_between_trials: Whether to aggressively clear GPU memory between trials
 
     Returns:
-        Dictionary mapping trial_idx -> results
+        Dictionary mapping trial_idx -> results (with only essential data to save memory)
 
     Example:
         >>> results = unlearn_multiple_trials(
@@ -578,21 +580,97 @@ def unlearn_multiple_trials(
         print(f"TRIAL {trial_idx + 1}/{num_trials}")
         print(f"{'#'*70}\n")
 
-        # Update trial index in config
-        trial_config = copy.deepcopy(unlearn_config)
-        trial_config.trial_idx = trial_idx
+        try:
+            # Update trial index in config
+            trial_config = copy.deepcopy(unlearn_config)
+            trial_config.trial_idx = trial_idx
 
-        # Run unlearning
-        results = unlearn_model(
-            model_checkpoint=model_checkpoint,
-            model_config=model_config,
-            unlearn_config=trial_config,
-            device=device,
-            evaluate=True,
-            save_unlearned=True,
-        )
+            # Run unlearning
+            results = unlearn_model(
+                model_checkpoint=model_checkpoint,
+                model_config=model_config,
+                unlearn_config=trial_config,
+                device=device,
+                evaluate=True,
+                save_unlearned=True,
+            )
 
-        all_results[trial_idx] = results
+            # Store only essential results to avoid memory accumulation
+            # Remove the actual model object which takes up most memory
+            essential_results = {
+                'evaluation_results': results['evaluation_results'],
+                'checkpoint_path': results.get('unlearned_checkpoint_path'),
+                'unlearning_time': results['unlearning_time'],
+            }
+            all_results[trial_idx] = essential_results
+
+            # Explicitly delete the full results and the model
+            if 'unlearned_model' in results:
+                del results['unlearned_model']
+            del results
+
+        except RuntimeError as e:
+            if "out of memory" in str(e).lower():
+                print(f"\n⚠️  CUDA OUT OF MEMORY on trial {trial_idx + 1}")
+                print("Clearing cache and retrying with reduced batch size...")
+                
+                # Aggressive memory cleanup
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    torch.cuda.synchronize()
+                gc.collect()
+                
+                # Retry with smaller batch size
+                trial_config = copy.deepcopy(unlearn_config)
+                trial_config.trial_idx = trial_idx
+                trial_config.batch_size = max(1, trial_config.batch_size // 2)
+                print(f"Retrying with batch_size={trial_config.batch_size}")
+                
+                results = unlearn_model(
+                    model_checkpoint=model_checkpoint,
+                    model_config=model_config,
+                    unlearn_config=trial_config,
+                    device=device,
+                    evaluate=True,
+                    save_unlearned=True,
+                )
+                
+                essential_results = {
+                    'evaluation_results': results['evaluation_results'],
+                    'checkpoint_path': results.get('unlearned_checkpoint_path'),
+                    'unlearning_time': results['unlearning_time'],
+                    'reduced_batch_size': trial_config.batch_size,
+                }
+                all_results[trial_idx] = essential_results
+                
+                if 'unlearned_model' in results:
+                    del results['unlearned_model']
+                del results
+            else:
+                raise
+
+        finally:
+            # Always clean up after each trial
+            if clear_memory_between_trials:
+                # Force garbage collection
+                gc.collect()
+                
+                # Clear CUDA cache if available
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    torch.cuda.synchronize()
+                    
+                    # Print memory stats for monitoring
+                    allocated = torch.cuda.memory_allocated() / 1e9
+                    reserved = torch.cuda.memory_reserved() / 1e9
+                    print(f"\n📊 GPU Memory after trial {trial_idx + 1}:")
+                    print(f"  Allocated: {allocated:.2f} GB")
+                    print(f"  Reserved: {reserved:.2f} GB")
+                    print(f"  Max Allocated: {torch.cuda.max_memory_allocated() / 1e9:.2f} GB")
+                    
+                    # Reset peak memory stats for next trial
+                    torch.cuda.reset_peak_memory_stats()
+                    print()
 
     # Summary across trials
     print(f"\n{'='*70}")

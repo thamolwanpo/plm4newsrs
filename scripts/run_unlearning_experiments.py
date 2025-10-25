@@ -54,6 +54,7 @@ Examples:
       --model-configs configs/experiments/simple/bert_finetune.yaml \\
       --checkpoints outputs/simple_bert_finetune/checkpoints/poisoned.ckpt \\
       --unlearn-configs configs/experiments/unlearning/first_order_ratio.yaml \\
+      --data-path data/politifact/train_poisoned.csv \\
       --ratios 0.01 0.05 0.10 \\
       --num-trials 5
 
@@ -84,15 +85,16 @@ Examples:
     )
 
     # ========== Unlearning Configuration ==========
-    unlearn_group = parser.add_mutually_exclusive_group()
-    unlearn_group.add_argument(
+    # REMOVED mutually_exclusive_group - now both can be used together
+    parser.add_argument(
         "--unlearn-configs",
         nargs="+",
         help="List of unlearning config paths (if provided, uses config-based approach)",
     )
 
-    unlearn_group.add_argument(
-        "--data-path", help="Path to training data CSV (for command-line based approach)"
+    parser.add_argument(
+        "--data-path", 
+        help="Path to training data CSV (can be used with or without --unlearn-configs)"
     )
 
     # ========== Experiment Parameters ==========
@@ -189,9 +191,8 @@ Examples:
             "⚠️  Warning: Number of unlearn-configs doesn't match methods. Using first config for all."
         )
 
-    if not args.unlearn_configs and not args.data_path:
-        print("❌ Either --unlearn-configs or --data-path is required")
-        return 1
+    # UPDATED: Make --data-path optional when --unlearn-configs is provided
+    # (configs may contain data paths internally)
 
     # ========== Quick Test Mode ==========
     if args.quick_test:
@@ -301,7 +302,7 @@ Examples:
                 "--ratios",
             ] + [str(r) for r in args.ratios]
 
-            # Add data path or unlearn config
+            # Add unlearn config if provided
             if args.unlearn_configs:
                 unlearn_config = (
                     args.unlearn_configs[method_idx]
@@ -309,7 +310,9 @@ Examples:
                     else args.unlearn_configs[0]
                 )
                 cmd += ["--unlearn-config", unlearn_config]
-            else:
+
+            # Add data path if provided
+            if args.data_path:
                 cmd += ["--data-path", args.data_path]
 
             # Add other parameters
