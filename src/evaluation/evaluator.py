@@ -228,9 +228,12 @@ class ModelEvaluator:
                             {
                                 "user_id": user_id,
                                 "news_id": news_id,
+                                "title": title,  # Add title for reference
                                 "score": scores[i][j],
                                 "label": label,
-                                "is_fake": is_fake,
+                                "is_fake": int(
+                                    is_fake
+                                ),  # CRITICAL: Ensure is_fake is included as int
                             }
                         )
 
