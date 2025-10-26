@@ -217,3 +217,5 @@ data/politifact/
 benchmarks/
 temp_unlearning_data/
 logs/
+notebooks/tables/
+notebooks/plots/
