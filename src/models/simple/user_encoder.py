@@ -54,10 +54,18 @@ class UserEncoder(BaseUserEncoder):
 
         Returns:
             user_embedding: (batch, hidden_size)
-            attention_weights: (batch, history_len) - optional, for analysis
         """
+        # Store history embeddings for analysis
+        if self.store_intermediate_outputs:
+            self._store_output("history_embeddings", history_embeddings)
+
         # Apply attention over history
         user_embedding, attention_weights = self.attention(history_embeddings, mask=history_mask)
+
+        # Store attention weights and user embedding for analysis
+        if self.store_intermediate_outputs:
+            self._store_output("attention_weights", attention_weights)
+            self._store_output("user_embedding", user_embedding)
 
         return self.dropout(user_embedding)
 

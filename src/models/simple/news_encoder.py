@@ -127,9 +127,15 @@ class NewsEncoder(BaseNewsEncoder):
                 seq_emb = torch.tensor(seq_emb, dtype=torch.float32, device=device)
                 seq_emb = seq_emb.unsqueeze(0)  # (1, max_seq_length, embed_dim)
 
+                if self.store_intermediate_outputs:
+                    self._store_output("word_embeddings", seq_emb)
+
                 # Apply shared AdditiveAttention
-                text_emb, _ = self.additive_attention(seq_emb)  # (1, embed_dim)
+                text_emb, attn_weights = self.additive_attention(seq_emb)  # (1, embed_dim)
                 text_emb = text_emb.squeeze(0)  # (embed_dim,)
+
+                if self.store_intermediate_outputs:
+                    self._store_output("attention_weights", attn_weights)
             else:
                 # Mean or max aggregation
                 text_emb = embed_text_with_glove(
@@ -143,6 +149,10 @@ class NewsEncoder(BaseNewsEncoder):
             batch_embeddings.append(text_emb)
 
         news_embedding = torch.stack(batch_embeddings)  # (batch, hidden_size)
+
+        if self.store_intermediate_outputs:
+            self._store_output("final_news_embedding", news_embedding)
+
         return news_embedding
 
     def _forward_transformer(self, input_ids, attention_mask):
@@ -160,10 +170,17 @@ class NewsEncoder(BaseNewsEncoder):
         lm_output = self.lm(input_ids=input_ids, attention_mask=attention_mask)
         last_hidden_state = lm_output.last_hidden_state  # (batch, seq_len, hidden_size)
 
+        if self.store_intermediate_outputs:
+            self._store_output("lm_embeddings", last_hidden_state)
+
         # Multi-head self-attention
         mha_input = last_hidden_state.permute(1, 0, 2)  # (seq_len, batch, hidden_size)
-        multihead_output, _ = self.multihead_attention(mha_input, mha_input, mha_input)
+        multihead_output, attn_weights = self.multihead_attention(mha_input, mha_input, mha_input)
         multihead_output = multihead_output.permute(1, 0, 2)  # (batch, seq_len, hidden_size)
+
+        if self.store_intermediate_outputs:
+            self._store_output("multihead_attention_output", multihead_output)
+            self._store_output("multihead_attention_weights", attn_weights)
 
         # Apply shared AdditiveAttention with masking
         # Need to create proper mask for attention
@@ -176,10 +193,16 @@ class NewsEncoder(BaseNewsEncoder):
         attention_scores = attention_scores.masked_fill(mask == 0, -1e9)
         attention_weights = torch.softmax(attention_scores, dim=1)  # (batch, seq_len)
 
+        if self.store_intermediate_outputs:
+            self._store_output("additive_attention_weights", attention_weights)
+
         # Weighted sum
         news_embedding = torch.bmm(attention_weights.unsqueeze(1), multihead_output).squeeze(
             1
         )  # (batch, hidden_size)
+
+        if self.store_intermediate_outputs:
+            self._store_output("final_news_embedding", news_embedding)
 
         return news_embedding
 

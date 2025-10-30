@@ -15,6 +15,10 @@ class BaseNewsEncoder(ABC, nn.Module):
         super().__init__()
         self.config = config
 
+        # For analysis
+        self.store_intermediate_outputs = False
+        self.intermediate_outputs = {}
+
     @abstractmethod
     def forward(self, *args, **kwargs):
         """Encode news into vector representation."""
@@ -26,6 +30,11 @@ class BaseNewsEncoder(ABC, nn.Module):
         """Return output dimension of encoder."""
         pass
 
+    def _store_output(self, name, tensor):
+        """Store intermediate output for analysis."""
+        if self.store_intermediate_outputs:
+            self.intermediate_outputs[name] = tensor.detach().cpu()
+
 
 class BaseUserEncoder(ABC, nn.Module):
     """
@@ -35,6 +44,10 @@ class BaseUserEncoder(ABC, nn.Module):
     def __init__(self, config):
         super().__init__()
         self.config = config
+
+        # For analysis
+        self.store_intermediate_outputs = False
+        self.intermediate_outputs = {}
 
     @abstractmethod
     def forward(self, history_embeddings, *args, **kwargs):
@@ -46,6 +59,11 @@ class BaseUserEncoder(ABC, nn.Module):
     def output_dim(self) -> int:
         """Return output dimension of encoder."""
         pass
+
+    def _store_output(self, name, tensor):
+        """Store intermediate output for analysis."""
+        if self.store_intermediate_outputs:
+            self.intermediate_outputs[name] = tensor.detach().cpu()
 
 
 class TextEncoder(nn.Module):
@@ -67,6 +85,10 @@ class TextEncoder(nn.Module):
     ):
         super().__init__()
         self.encoder_type = encoder_type
+
+        # For analysis
+        self.store_intermediate_outputs = False
+        self.intermediate_outputs = {}
 
         if encoder_type == "cnn":
             self.encoder = CNNEncoder(
@@ -100,12 +122,27 @@ class TextEncoder(nn.Module):
         """
         if self.encoder_type == "cnn":
             encoded = self.encoder(x)
+            if self.store_intermediate_outputs:
+                self.intermediate_outputs["cnn_output"] = encoded.detach().cpu()
         elif self.encoder_type == "attention":
-            encoded, _ = self.encoder(x, mask)
+            encoded, attn_weights = self.encoder(x, mask)
             encoded = encoded.mean(dim=1)  # Average pooling
+            if self.store_intermediate_outputs:
+                self.intermediate_outputs["attention_output"] = encoded.detach().cpu()
+                self.intermediate_outputs["attention_weights"] = attn_weights.detach().cpu()
         elif self.encoder_type == "lstm":
             encoded, _ = self.encoder(x)
             encoded = encoded[:, -1, :]  # Last hidden state
+            if self.store_intermediate_outputs:
+                self.intermediate_outputs["lstm_output"] = encoded.detach().cpu()
 
         output = self.projection(encoded)
+        if self.store_intermediate_outputs:
+            self.intermediate_outputs["projected_output"] = output.detach().cpu()
+
         return self.dropout(output)
+
+    def _store_output(self, name, tensor):
+        """Store intermediate output for analysis."""
+        if self.store_intermediate_outputs:
+            self.intermediate_outputs[name] = tensor.detach().cpu()

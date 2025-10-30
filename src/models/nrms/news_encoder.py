@@ -122,16 +122,32 @@ class NRMSNewsEncoder(BaseNewsEncoder):
             seq_emb = torch.tensor(seq_emb, dtype=torch.float32, device=device)
             seq_emb = seq_emb.unsqueeze(0)  # (1, max_seq_length, embed_dim)
 
+            if self.store_intermediate_outputs:
+                self._store_output("word_embeddings", seq_emb)
+
             # Multi-head self-attention over words
-            word_vecs, _ = self.word_self_attention(seq_emb)  # (1, max_seq_length, embed_dim)
+            word_vecs, attn_weights = self.word_self_attention(
+                seq_emb
+            )  # (1, max_seq_length, embed_dim)
+
+            if self.store_intermediate_outputs:
+                self._store_output("self_attention_output", word_vecs)
+                self._store_output("self_attention_weights", attn_weights)
 
             # Additive attention for aggregation
-            news_vec, _ = self.word_attention(word_vecs)  # (1, embed_dim)
+            news_vec, word_attn_weights = self.word_attention(word_vecs)  # (1, embed_dim)
             news_vec = news_vec.squeeze(0)  # (embed_dim,)
+
+            if self.store_intermediate_outputs:
+                self._store_output("word_attention_weights", word_attn_weights)
 
             batch_embeddings.append(news_vec)
 
         news_embedding = torch.stack(batch_embeddings)  # (batch, hidden_size)
+
+        if self.store_intermediate_outputs:
+            self._store_output("final_news_embedding", news_embedding)
+
         return news_embedding
 
     def _forward_transformer(self, input_ids, attention_mask):
@@ -149,15 +165,26 @@ class NRMSNewsEncoder(BaseNewsEncoder):
         lm_output = self.lm(input_ids=input_ids, attention_mask=attention_mask)
         word_embeddings = lm_output.last_hidden_state  # (batch, seq_len, hidden_size)
 
+        if self.store_intermediate_outputs:
+            self._store_output("lm_embeddings", word_embeddings)
+
         # Multi-head self-attention over words
-        word_vecs, _ = self.word_self_attention(
+        word_vecs, attn_weights = self.word_self_attention(
             word_embeddings, mask=attention_mask
         )  # (batch, seq_len, hidden_size)
 
+        if self.store_intermediate_outputs:
+            self._store_output("self_attention_output", word_vecs)
+            self._store_output("self_attention_weights", attn_weights)
+
         # Additive attention for word aggregation
-        news_embedding, _ = self.word_attention(
+        news_embedding, word_attn_weights = self.word_attention(
             word_vecs, mask=attention_mask
         )  # (batch, hidden_size)
+
+        if self.store_intermediate_outputs:
+            self._store_output("word_attention_weights", word_attn_weights)
+            self._store_output("final_news_embedding", news_embedding)
 
         return news_embedding
 

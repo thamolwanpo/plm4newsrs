@@ -98,6 +98,10 @@ class NAMLNewsEncoder(BaseNewsEncoder):
         self.dropout = nn.Dropout(config.drop_rate)
         self.output_size = config.num_filters
 
+        # For analysis: store view representations before aggregation
+        self.store_view_representations = False
+        self.last_view_representations = {}
+
     def _init_glove_embeddings(self):
         """Initialize GloVe-based embeddings."""
         print(f"Using GloVe embeddings from: {self.config.glove_file_path}")
@@ -162,7 +166,13 @@ class NAMLNewsEncoder(BaseNewsEncoder):
             embeddings: (batch, seq_len, hidden_size)
         """
         lm_output = self.lm(input_ids=input_ids, attention_mask=attention_mask)
-        return lm_output.last_hidden_state  # (batch, seq_len, hidden_size)
+        embeddings = lm_output.last_hidden_state  # (batch, seq_len, hidden_size)
+
+        # Store for analysis
+        if self.store_intermediate_outputs:
+            self._store_output("lm_embeddings", embeddings)
+
+        return embeddings
 
     def _aggregate_views(self, view_representations):
         """
@@ -174,6 +184,11 @@ class NAMLNewsEncoder(BaseNewsEncoder):
         Returns:
             aggregated: (batch, num_filters)
         """
+        # Store individual views for analysis
+        if self.store_view_representations:
+            for i, view_repr in enumerate(view_representations):
+                self.last_view_representations[f"view_{i}"] = view_repr.detach().cpu()
+
         if len(view_representations) == 1:
             return view_representations[0]
 
@@ -191,6 +206,10 @@ class NAMLNewsEncoder(BaseNewsEncoder):
         # Simple dot product attention
         scores = torch.matmul(views, self.view_attention_query)  # (batch, num_views)
         attention_weights = torch.softmax(scores, dim=1)  # (batch, num_views)
+
+        # Store view attention weights for analysis
+        if self.store_intermediate_outputs:
+            self._store_output("view_attention_weights", attention_weights)
 
         # Weighted sum of views
         attention_weights = attention_weights.unsqueeze(-1)  # (batch, num_views, 1)
@@ -212,8 +231,14 @@ class NAMLNewsEncoder(BaseNewsEncoder):
         # CNN encoding
         cnn_output = self.title_cnn(title_embeddings)  # (batch, num_filters * num_windows)
 
+        if self.store_intermediate_outputs:
+            self._store_output("title_cnn_output", cnn_output)
+
         # Project to num_filters dimension
         title_repr = self.title_projection(cnn_output)  # (batch, num_filters)
+
+        if self.store_intermediate_outputs:
+            self._store_output("title_representation", title_repr)
 
         return title_repr
 
@@ -231,8 +256,14 @@ class NAMLNewsEncoder(BaseNewsEncoder):
         # CNN encoding
         cnn_output = self.body_cnn(body_embeddings)  # (batch, num_filters * num_windows)
 
+        if self.store_intermediate_outputs:
+            self._store_output("body_cnn_output", cnn_output)
+
         # Project to num_filters dimension
         body_repr = self.body_projection(cnn_output)  # (batch, num_filters)
+
+        if self.store_intermediate_outputs:
+            self._store_output("body_representation", body_repr)
 
         return body_repr
 
@@ -248,6 +279,10 @@ class NAMLNewsEncoder(BaseNewsEncoder):
         """
         category_emb = self.category_encoder(category_ids)  # (batch, category_embed_dim)
         category_repr = self.category_dense(category_emb)  # (batch, num_filters)
+
+        if self.store_intermediate_outputs:
+            self._store_output("category_representation", category_repr)
+
         return category_repr
 
     def _encode_subcategory(self, subcategory_ids):
@@ -264,6 +299,10 @@ class NAMLNewsEncoder(BaseNewsEncoder):
             subcategory_ids
         )  # (batch, subcategory_embed_dim)
         subcategory_repr = self.subcategory_dense(subcategory_emb)  # (batch, num_filters)
+
+        if self.store_intermediate_outputs:
+            self._store_output("subcategory_representation", subcategory_repr)
+
         return subcategory_repr
 
     def forward(
@@ -351,6 +390,9 @@ class NAMLNewsEncoder(BaseNewsEncoder):
         # Aggregate views with attention
         news_embedding = self._aggregate_views(view_representations)
 
+        if self.store_intermediate_outputs:
+            self._store_output("final_news_embedding", news_embedding)
+
         return self.dropout(news_embedding)
 
     def _forward_transformer(
@@ -393,6 +435,9 @@ class NAMLNewsEncoder(BaseNewsEncoder):
 
         # Aggregate views with attention
         news_embedding = self._aggregate_views(view_representations)
+
+        if self.store_intermediate_outputs:
+            self._store_output("final_news_embedding", news_embedding)
 
         return self.dropout(news_embedding)
 

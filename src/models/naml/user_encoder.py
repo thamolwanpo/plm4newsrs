@@ -48,10 +48,19 @@ class NAMLUserEncoder(BaseUserEncoder):
         Returns:
             user_embedding: (batch, hidden_size)
         """
+        # Store history embeddings for analysis
+        if self.store_intermediate_outputs:
+            self._store_output("history_embeddings", history_embeddings)
+
         # Apply attention over browsed news
         user_embedding, attention_weights = self.news_attention(
             history_embeddings, mask=history_mask
         )
+
+        # Store attention weights and user embedding for analysis
+        if self.store_intermediate_outputs:
+            self._store_output("news_attention_weights", attention_weights)
+            self._store_output("user_embedding", user_embedding)
 
         return self.dropout(user_embedding)
 

@@ -28,6 +28,42 @@ class NRMSRecommenderModel(nn.Module):
         self.news_encoder = NRMSNewsEncoder(config)
         self.user_encoder = NRMSUserEncoder(config)
 
+        # For analysis
+        self.store_intermediate_outputs = False
+        self.intermediate_outputs = {}
+
+    def enable_analysis_mode(self):
+        """Enable analysis mode for all components."""
+        self.store_intermediate_outputs = True
+        self.news_encoder.store_intermediate_outputs = True
+        self.user_encoder.store_intermediate_outputs = True
+
+        # Enable attention weight storage
+        if hasattr(self.news_encoder, "word_self_attention"):
+            self.news_encoder.word_self_attention.store_attention_weights = True
+        if hasattr(self.news_encoder, "word_attention"):
+            self.news_encoder.word_attention.store_attention_weights = True
+        if hasattr(self.user_encoder, "news_self_attention"):
+            self.user_encoder.news_self_attention.store_attention_weights = True
+        if hasattr(self.user_encoder, "news_attention"):
+            self.user_encoder.news_attention.store_attention_weights = True
+
+    def disable_analysis_mode(self):
+        """Disable analysis mode for all components."""
+        self.store_intermediate_outputs = False
+        self.news_encoder.store_intermediate_outputs = False
+        self.user_encoder.store_intermediate_outputs = False
+
+        # Disable attention weight storage
+        if hasattr(self.news_encoder, "word_self_attention"):
+            self.news_encoder.word_self_attention.store_attention_weights = False
+        if hasattr(self.news_encoder, "word_attention"):
+            self.news_encoder.word_attention.store_attention_weights = False
+        if hasattr(self.user_encoder, "news_self_attention"):
+            self.user_encoder.news_self_attention.store_attention_weights = False
+        if hasattr(self.user_encoder, "news_attention"):
+            self.user_encoder.news_attention.store_attention_weights = False
+
     def forward(self, batch):
         """
         Forward pass.
@@ -51,8 +87,17 @@ class NRMSRecommenderModel(nn.Module):
         else:
             candidate_embeddings, history_embeddings = self._forward_transformer(batch)
 
+        # Store embeddings for analysis
+        if self.store_intermediate_outputs:
+            self.intermediate_outputs["candidate_embeddings"] = candidate_embeddings.detach().cpu()
+            self.intermediate_outputs["history_embeddings"] = history_embeddings.detach().cpu()
+
         # Get user representation from history
         user_embedding = self.user_encoder(history_embeddings)
+
+        # Store user embedding for analysis
+        if self.store_intermediate_outputs:
+            self.intermediate_outputs["user_embedding"] = user_embedding.detach().cpu()
 
         # Calculate click scores: dot product between candidates and user
         scores = torch.bmm(
@@ -61,6 +106,10 @@ class NRMSRecommenderModel(nn.Module):
         ).squeeze(
             dim=-1
         )  # (batch, num_candidates)
+
+        # Store scores for analysis
+        if self.store_intermediate_outputs:
+            self.intermediate_outputs["scores"] = scores.detach().cpu()
 
         return scores
 

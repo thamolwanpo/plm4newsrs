@@ -12,11 +12,16 @@ class AdditiveAttention(nn.Module):
     Formula: score = v^T * tanh(W * x + b)
     """
 
-    def __init__(self, input_dim: int, hidden_dim: int):
+    def __init__(self, input_dim: int, hidden_dim: int, return_attention: bool = False):
         super().__init__()
         self.attention = nn.Sequential(
             nn.Linear(input_dim, hidden_dim), nn.Tanh(), nn.Linear(hidden_dim, 1, bias=False)
         )
+        self.return_attention = return_attention
+
+        # For analysis
+        self.store_attention_weights = False
+        self.last_attention_weights = None
 
     def forward(self, inputs, mask=None):
         """
@@ -36,6 +41,10 @@ class AdditiveAttention(nn.Module):
 
         # Calculate attention weights
         weights = F.softmax(scores, dim=-1)  # (batch, seq_len)
+
+        # Store for analysis if enabled
+        if self.store_attention_weights:
+            self.last_attention_weights = weights.detach()
 
         # Weighted sum
         output = torch.bmm(weights.unsqueeze(1), inputs).squeeze(1)  # (batch, input_dim)
@@ -62,6 +71,10 @@ class MultiHeadSelfAttention(nn.Module):
         self.qkv_proj = nn.Linear(embed_dim, 3 * embed_dim)
         self.out_proj = nn.Linear(embed_dim, embed_dim)
         self.dropout = nn.Dropout(dropout)
+
+        # For analysis
+        self.store_attention_weights = False
+        self.last_attention_weights = None
 
     def forward(self, x, mask=None):
         """
@@ -92,6 +105,10 @@ class MultiHeadSelfAttention(nn.Module):
         attention_weights = F.softmax(scores, dim=-1)
         attention_weights = self.dropout(attention_weights)
 
+        # Store for analysis if enabled
+        if self.store_attention_weights:
+            self.last_attention_weights = attention_weights.detach()
+
         # Apply attention to values
         output = torch.matmul(attention_weights, v)
         # (batch, num_heads, seq_len, head_dim)
@@ -116,6 +133,10 @@ class ScaledDotProductAttention(nn.Module):
         super().__init__()
         self.temperature = temperature
 
+        # For analysis
+        self.store_attention_weights = False
+        self.last_attention_weights = None
+
     def forward(self, q, k, v, mask=None):
         """
         Args:
@@ -135,7 +156,12 @@ class ScaledDotProductAttention(nn.Module):
             scores = scores.masked_fill(mask == 0, -1e9)
 
         attention = F.softmax(scores, dim=-1)
-        output = torch.matmm(attention, v)
+
+        # Store for analysis if enabled
+        if self.store_attention_weights:
+            self.last_attention_weights = attention.detach()
+
+        output = torch.matmul(attention, v)
 
         return output, attention
 
@@ -151,6 +177,10 @@ class PersonalizedAttention(nn.Module):
         self.query_proj = nn.Linear(query_dim, hidden_dim)
         self.key_proj = nn.Linear(key_dim, hidden_dim)
         self.score_proj = nn.Linear(hidden_dim, 1)
+
+        # For analysis
+        self.store_attention_weights = False
+        self.last_attention_weights = None
 
     def forward(self, query, keys, mask=None):
         """
@@ -174,6 +204,11 @@ class PersonalizedAttention(nn.Module):
             scores = scores.masked_fill(mask == 0, -1e9)
 
         weights = F.softmax(scores, dim=-1)
+
+        # Store for analysis if enabled
+        if self.store_attention_weights:
+            self.last_attention_weights = weights.detach()
+
         output = torch.bmm(weights.unsqueeze(1), keys).squeeze(1)
 
         return output, weights

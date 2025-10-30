@@ -30,6 +30,36 @@ class NAMLRecommenderModel(nn.Module):
         self.news_encoder = NAMLNewsEncoder(config)
         self.user_encoder = NAMLUserEncoder(config)
 
+        # For analysis
+        self.store_intermediate_outputs = False
+        self.intermediate_outputs = {}
+
+    def enable_analysis_mode(self):
+        """Enable analysis mode for all components."""
+        self.store_intermediate_outputs = True
+        self.news_encoder.store_intermediate_outputs = True
+        self.news_encoder.store_view_representations = True
+        self.user_encoder.store_intermediate_outputs = True
+
+        # Enable attention weight storage
+        if hasattr(self.news_encoder, "word_attention"):
+            self.news_encoder.word_attention.store_attention_weights = True
+        if hasattr(self.user_encoder, "news_attention"):
+            self.user_encoder.news_attention.store_attention_weights = True
+
+    def disable_analysis_mode(self):
+        """Disable analysis mode for all components."""
+        self.store_intermediate_outputs = False
+        self.news_encoder.store_intermediate_outputs = False
+        self.news_encoder.store_view_representations = False
+        self.user_encoder.store_intermediate_outputs = False
+
+        # Disable attention weight storage
+        if hasattr(self.news_encoder, "word_attention"):
+            self.news_encoder.word_attention.store_attention_weights = False
+        if hasattr(self.user_encoder, "news_attention"):
+            self.user_encoder.news_attention.store_attention_weights = False
+
     def forward(self, batch):
         """
         Forward pass.
@@ -55,8 +85,17 @@ class NAMLRecommenderModel(nn.Module):
         else:
             candidate_embeddings, history_embeddings = self._forward_transformer(batch)
 
+        # Store embeddings for analysis
+        if self.store_intermediate_outputs:
+            self.intermediate_outputs["candidate_embeddings"] = candidate_embeddings.detach().cpu()
+            self.intermediate_outputs["history_embeddings"] = history_embeddings.detach().cpu()
+
         # Get user representation from history
         user_embedding = self.user_encoder(history_embeddings)
+
+        # Store user embedding for analysis
+        if self.store_intermediate_outputs:
+            self.intermediate_outputs["user_embedding"] = user_embedding.detach().cpu()
 
         # Calculate click scores: dot product between candidates and user
         scores = torch.bmm(
@@ -65,6 +104,10 @@ class NAMLRecommenderModel(nn.Module):
         ).squeeze(
             dim=-1
         )  # (batch, num_candidates)
+
+        # Store scores for analysis
+        if self.store_intermediate_outputs:
+            self.intermediate_outputs["scores"] = scores.detach().cpu()
 
         return scores
 
@@ -147,8 +190,12 @@ class NAMLRecommenderModel(nn.Module):
             history_embeddings: (batch, history_len, hidden_size)
         """
         # Encode candidates
-        candidate_title_ids = batch.get("candidate_input_ids", "candidate_title_input_ids")
-        candidate_title_mask = batch.get("candidate_attention_mask", "candidate_title_attention_mask")
+        candidate_title_ids = batch.get(
+            "candidate_input_ids", batch.get("candidate_title_input_ids")
+        )
+        candidate_title_mask = batch.get(
+            "candidate_attention_mask", batch.get("candidate_title_attention_mask")
+        )
         batch_size, num_candidates, max_title_len = candidate_title_ids.shape
 
         # Optional views
@@ -202,8 +249,10 @@ class NAMLRecommenderModel(nn.Module):
         # (batch, num_candidates, hidden_size)
 
         # Encode history
-        history_title_ids = batch.get("history_input_ids", "history_title_input_ids")
-        history_title_mask = batch.get("history_attention_mask", "history_title_attention_mask")
+        history_title_ids = batch.get("history_input_ids", batch.get("history_title_input_ids"))
+        history_title_mask = batch.get(
+            "history_attention_mask", batch.get("history_title_attention_mask")
+        )
         batch_size, history_len, max_title_len = history_title_ids.shape
 
         # Optional views

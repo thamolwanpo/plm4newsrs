@@ -66,15 +66,29 @@ class NRMSUserEncoder(BaseUserEncoder):
         Returns:
             user_embedding: (batch, hidden_size)
         """
+        # Store history embeddings for analysis
+        if self.store_intermediate_outputs:
+            self._store_output("history_embeddings", history_embeddings)
+
         # Multi-head self-attention over browsed news
-        news_vecs, _ = self.news_self_attention(
+        news_vecs, self_attn_weights = self.news_self_attention(
             history_embeddings, mask=history_mask
         )  # (batch, history_len, hidden_size)
+
+        # Store self-attention outputs for analysis
+        if self.store_intermediate_outputs:
+            self._store_output("self_attention_output", news_vecs)
+            self._store_output("self_attention_weights", self_attn_weights)
 
         # Additive attention for aggregation
         user_embedding, attention_weights = self.news_attention(
             news_vecs, mask=history_mask
         )  # (batch, hidden_size)
+
+        # Store attention weights and user embedding for analysis
+        if self.store_intermediate_outputs:
+            self._store_output("news_attention_weights", attention_weights)
+            self._store_output("user_embedding", user_embedding)
 
         return self.dropout(user_embedding)
 

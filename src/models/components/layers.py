@@ -30,6 +30,10 @@ class CNNEncoder(nn.Module):
         )
         self.dropout = nn.Dropout(dropout)
 
+        # For analysis
+        self.store_intermediate_outputs = False
+        self.intermediate_outputs = {}
+
     def forward(self, x):
         """
         Args:
@@ -42,13 +46,18 @@ class CNNEncoder(nn.Module):
 
         # Apply convolutions
         conv_outputs = []
-        for conv in self.convs:
+        for i, conv in enumerate(self.convs):
             conv_out = F.relu(conv(x))  # (batch, num_filters, seq_len)
+            if self.store_intermediate_outputs:
+                self.intermediate_outputs[f"conv_{i}_output"] = conv_out.detach().cpu()
             pooled = F.max_pool1d(conv_out, conv_out.size(2)).squeeze(2)
             conv_outputs.append(pooled)
 
         # Concatenate all filter outputs
         output = torch.cat(conv_outputs, dim=1)
+        if self.store_intermediate_outputs:
+            self.intermediate_outputs["concatenated_output"] = output.detach().cpu()
+
         return self.dropout(output)
 
 
@@ -88,8 +97,15 @@ class DenseLayer(nn.Module):
 
         self.layer = nn.Sequential(*layers)
 
+        # For analysis
+        self.store_intermediate_outputs = False
+        self.last_output = None
+
     def forward(self, x):
-        return self.layer(x)
+        output = self.layer(x)
+        if self.store_intermediate_outputs:
+            self.last_output = output.detach().cpu()
+        return output
 
 
 class PositionalEncoding(nn.Module):
@@ -134,6 +150,10 @@ class ResidualBlock(nn.Module):
         self.layer_norm = nn.LayerNorm(input_dim)
         self.dropout = nn.Dropout(dropout)
 
+        # For analysis
+        self.store_intermediate_outputs = False
+        self.last_output = None
+
     def forward(self, x, *args, **kwargs):
         """
         Apply layer with residual connection.
@@ -146,10 +166,14 @@ class ResidualBlock(nn.Module):
             x, *others = x
             x = self.dropout(x)
             x = self.layer_norm(x + residual)
+            if self.store_intermediate_outputs:
+                self.last_output = x.detach().cpu()
             return (x, *others)
         else:
             x = self.dropout(x)
             x = self.layer_norm(x + residual)
+            if self.store_intermediate_outputs:
+                self.last_output = x.detach().cpu()
             return x
 
 
@@ -163,6 +187,10 @@ class CategoryEncoder(nn.Module):
         super().__init__()
         self.embedding = nn.Embedding(num_categories, embedding_dim, padding_idx=padding_idx)
 
+        # For analysis
+        self.store_intermediate_outputs = False
+        self.last_output = None
+
     def forward(self, category_ids):
         """
         Args:
@@ -170,7 +198,10 @@ class CategoryEncoder(nn.Module):
         Returns:
             embeddings: (batch, embedding_dim) or (batch, seq_len, embedding_dim)
         """
-        return self.embedding(category_ids)
+        output = self.embedding(category_ids)
+        if self.store_intermediate_outputs:
+            self.last_output = output.detach().cpu()
+        return output
 
 
 class GatingMechanism(nn.Module):
@@ -184,6 +215,10 @@ class GatingMechanism(nn.Module):
         self.num_views = num_views
         self.gate = nn.Linear(input_dim * num_views, num_views)
 
+        # For analysis
+        self.store_intermediate_outputs = False
+        self.last_gate_weights = None
+
     def forward(self, views):
         """
         Args:
@@ -196,6 +231,9 @@ class GatingMechanism(nn.Module):
 
         # Calculate gate weights
         gate_weights = F.softmax(self.gate(concat), dim=-1)  # (batch, num_views)
+
+        if self.store_intermediate_outputs:
+            self.last_gate_weights = gate_weights.detach().cpu()
 
         # Weighted combination
         output = torch.zeros_like(views[0])
