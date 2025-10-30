@@ -25,10 +25,10 @@ removal_strategy: "fake_positive_history"  # Remove fake-positive contexts
 # UNLEARNING PARAMETERS
 # ============================================
 # Learning rate (α) - step size for parameter update
-learning_rate: 0.005
+learning_rate: 0.0005
 
 # Number of unlearning steps
-num_steps: 5
+num_steps: 3
 
 # Damping factor for numerical stability
 damping: 0.00

@@ -64,16 +64,22 @@ declare -a EXPERIMENTS=(
     #  --unlearn-configs $GRADIENT_ASCENT_CONFIG"
 
     # naml bert frozen, first_order
-    "--model-configs configs/experiments/naml/naml_bert_frozen.yaml \
-     --checkpoints outputs/politifact/naml_model/bert_frozen/checkpoints/poisoned-epoch=03-val_auc=0.7625.ckpt \
-     --methods first_order \
-     --unlearn-configs $FIRST_ORDER_CONFIG"
+    # "--model-configs configs/experiments/naml/naml_bert_frozen.yaml \
+    #  --checkpoints outputs/politifact/naml_model/bert_frozen/checkpoints/poisoned-epoch=03-val_auc=0.7625.ckpt \
+    #  --methods first_order \
+    #  --unlearn-configs $FIRST_ORDER_CONFIG"
 
-    # naml bert frozen, gradient_ascent
-    "--model-configs configs/experiments/naml/naml_bert_frozen.yaml \
-     --checkpoints outputs/politifact/naml_model/bert_frozen/checkpoints/poisoned-epoch=03-val_auc=0.7625.ckpt \
+    # naml glove, gradient_ascent
+    "--model-configs configs/experiments/naml/naml_glove.yaml \
+     --checkpoints outputs/politifact/naml_model/glove_300_frozen/checkpoints/poisoned-epoch=06-val_auc=0.7200.ckpt \
      --methods gradient_ascent \
      --unlearn-configs $GRADIENT_ASCENT_CONFIG"
+
+    # # naml bert frozen, gradient_ascent
+    # "--model-configs configs/experiments/naml/naml_bert_frozen.yaml \
+    #  --checkpoints outputs/politifact/naml_model/bert_frozen/checkpoints/poisoned-epoch=03-val_auc=0.7625.ckpt \
+    #  --methods gradient_ascent \
+    #  --unlearn-configs $GRADIENT_ASCENT_CONFIG"
 )
 
 # -------------------------------------------------------------

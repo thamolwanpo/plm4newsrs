@@ -165,20 +165,37 @@ class GradientAscentUnlearning(BaseUnlearningMethod):
 
         return self.model
 
-    def _apply_gradient_ascent_step(
-        self, forget_loader: torch.utils.data.DataLoader
-    ) -> tuple[float, float]:
+    def _apply_gradient_ascent_step(self, forget_loader):
         """
-        Apply one step of gradient ascent on forget set.
-
-        Computes: θ = θ + α · ∇ℓ(Z_forget, θ)
+        Apply gradient ascent by reversing the ranking.
         """
         self.model.train()
 
+        # Store initial params for comparison
+        initial_params = {}
+        for name, param in self.model.named_parameters():
+            if param.requires_grad:
+                initial_params[name] = param.data.clone()
+
         total_loss = 0.0
-        total_grad_norm = 0.0
+        total_grad_norm_raw = 0.0
         num_batches = 0
 
+        # Track predictions BEFORE updates
+        predictions_before = []
+        with torch.no_grad():
+            for batch in forget_loader:
+                if batch is None:
+                    continue
+                batch_tensors = {
+                    k: v.to(self.device) if isinstance(v, torch.Tensor) else v
+                    for k, v in batch.items()
+                }
+                scores = self.model(batch_tensors)
+                preds = torch.argmax(scores, dim=1)
+                predictions_before.extend(preds.cpu().tolist())
+
+        # Now do gradient ascent
         for batch in forget_loader:
             if batch is None:
                 continue
@@ -198,41 +215,86 @@ class GradientAscentUnlearning(BaseUnlearningMethod):
 
             # Forward pass
             scores = self.model(batch_tensors)
+
+            # Loss
             loss = self.criterion(scores, labels)
 
-            # Backward pass - compute gradients
+            # Backward pass
             loss.backward()
 
-            # Clip gradients for stability
-            if self.gradient_clip_val > 0:
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.gradient_clip_val)
+            # Calculate raw gradient norm
+            raw_grad_norm = 0.0
+            for param in self.model.parameters():
+                if param.grad is not None:
+                    raw_grad_norm += torch.sum(param.grad.data**2).item()
 
-            # GRADIENT ASCENT: Update in the OPPOSITE direction of gradient descent
-            # θ = θ + α · ∇ℓ (instead of θ = θ - α · ∇ℓ)
+            total_grad_norm_raw += raw_grad_norm
+
+            # GRADIENT ASCENT: θ = θ + α · ∇ℓ
             with torch.no_grad():
-                batch_grad_norm = 0.0
                 for param in self.model.parameters():
                     if param.grad is not None:
-                        # ASCENT: Add gradient (not subtract)
                         param.data.add_(self.learning_rate * param.grad.data)
-                        batch_grad_norm += torch.sum(param.grad.data**2).item()
-
-                total_grad_norm += batch_grad_norm
 
             total_loss += loss.item()
             num_batches += 1
 
             # Cleanup
+            del batch_tensors, scores, labels, loss
             import gc
 
-            del batch_tensors, scores, labels, loss
             gc.collect()
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
+        # Track predictions AFTER updates
+        predictions_after = []
+        with torch.no_grad():
+            for batch in forget_loader:
+                if batch is None:
+                    continue
+                batch_tensors = {
+                    k: v.to(self.device) if isinstance(v, torch.Tensor) else v
+                    for k, v in batch.items()
+                }
+                scores = self.model(batch_tensors)
+                preds = torch.argmax(scores, dim=1)
+                predictions_after.extend(preds.cpu().tolist())
+
+        # Calculate parameter changes
+        max_param_change = 0.0
+        total_param_change = 0.0
+        num_params_changed = 0
+
+        for name, param in self.model.named_parameters():
+            if name in initial_params:
+                change = torch.norm(param.data - initial_params[name]).item()
+                max_param_change = max(max_param_change, change)
+                total_param_change += change
+                num_params_changed += 1
+
+        avg_param_change = (
+            total_param_change / num_params_changed if num_params_changed > 0 else 0.0
+        )
+
+        # Print diagnostics
+        print(f"     Training loss: {total_loss / num_batches:.4f}")
+        print(
+            f"     Raw gradient norm: {torch.sqrt(torch.tensor(total_grad_norm_raw / num_batches)).item():.6f}"
+        )
+        print(f"     Learning rate: {self.learning_rate}")
+        print(f"     Max param change: {max_param_change:.6f}")
+        print(f"     Avg param change: {avg_param_change:.6f}")
+
+        # Prediction changes
+        pred_before_0 = sum(1 for p in predictions_before if p == 0) / len(predictions_before)
+        pred_after_0 = sum(1 for p in predictions_after if p == 0) / len(predictions_after)
+        print(f"     % predicting pos 0 BEFORE: {pred_before_0*100:.2f}%")
+        print(f"     % predicting pos 0 AFTER: {pred_after_0*100:.2f}%")
+
         avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
         avg_grad_norm = (
-            torch.sqrt(torch.tensor(total_grad_norm / num_batches)).item()
+            torch.sqrt(torch.tensor(total_grad_norm_raw / num_batches)).item()
             if num_batches > 0
             else 0.0
         )
@@ -247,5 +309,4 @@ class GradientAscentUnlearning(BaseUnlearningMethod):
             "formula": "θ_new = θ + α · ∇ℓ(Z_forget, θ)",
             "learning_rate": self.learning_rate,
             "num_steps": self.num_steps,
-            "gradient_clip_val": self.gradient_clip_val,
         }

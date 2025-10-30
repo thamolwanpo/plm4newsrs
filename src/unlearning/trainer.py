@@ -534,6 +534,7 @@ def _save_unlearned_model(
 
     return checkpoint_path
 
+
 def unlearn_multiple_trials(
     model_checkpoint: Path,
     model_config: BaseConfig,
@@ -598,34 +599,34 @@ def unlearn_multiple_trials(
             # Store only essential results to avoid memory accumulation
             # Remove the actual model object which takes up most memory
             essential_results = {
-                'evaluation_results': results['evaluation_results'],
-                'checkpoint_path': results.get('unlearned_checkpoint_path'),
-                'unlearning_time': results['unlearning_time'],
+                "evaluation_results": results["evaluation_results"],
+                "checkpoint_path": results.get("unlearned_checkpoint_path"),
+                "unlearning_time": results["unlearning_time"],
             }
             all_results[trial_idx] = essential_results
 
             # Explicitly delete the full results and the model
-            if 'unlearned_model' in results:
-                del results['unlearned_model']
+            if "unlearned_model" in results:
+                del results["unlearned_model"]
             del results
 
         except RuntimeError as e:
             if "out of memory" in str(e).lower():
                 print(f"\n⚠️  CUDA OUT OF MEMORY on trial {trial_idx + 1}")
                 print("Clearing cache and retrying with reduced batch size...")
-                
+
                 # Aggressive memory cleanup
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
                     torch.cuda.synchronize()
                 gc.collect()
-                
+
                 # Retry with smaller batch size
                 trial_config = copy.deepcopy(unlearn_config)
                 trial_config.trial_idx = trial_idx
                 trial_config.batch_size = max(1, trial_config.batch_size // 2)
                 print(f"Retrying with batch_size={trial_config.batch_size}")
-                
+
                 results = unlearn_model(
                     model_checkpoint=model_checkpoint,
                     model_config=model_config,
@@ -634,17 +635,17 @@ def unlearn_multiple_trials(
                     evaluate=True,
                     save_unlearned=True,
                 )
-                
+
                 essential_results = {
-                    'evaluation_results': results['evaluation_results'],
-                    'checkpoint_path': results.get('unlearned_checkpoint_path'),
-                    'unlearning_time': results['unlearning_time'],
-                    'reduced_batch_size': trial_config.batch_size,
+                    "evaluation_results": results["evaluation_results"],
+                    "checkpoint_path": results.get("unlearned_checkpoint_path"),
+                    "unlearning_time": results["unlearning_time"],
+                    "reduced_batch_size": trial_config.batch_size,
                 }
                 all_results[trial_idx] = essential_results
-                
-                if 'unlearned_model' in results:
-                    del results['unlearned_model']
+
+                if "unlearned_model" in results:
+                    del results["unlearned_model"]
                 del results
             else:
                 raise
@@ -654,12 +655,12 @@ def unlearn_multiple_trials(
             if clear_memory_between_trials:
                 # Force garbage collection
                 gc.collect()
-                
+
                 # Clear CUDA cache if available
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
                     torch.cuda.synchronize()
-                    
+
                     # Print memory stats for monitoring
                     allocated = torch.cuda.memory_allocated() / 1e9
                     reserved = torch.cuda.memory_reserved() / 1e9
@@ -667,7 +668,7 @@ def unlearn_multiple_trials(
                     print(f"  Allocated: {allocated:.2f} GB")
                     print(f"  Reserved: {reserved:.2f} GB")
                     print(f"  Max Allocated: {torch.cuda.max_memory_allocated() / 1e9:.2f} GB")
-                    
+
                     # Reset peak memory stats for next trial
                     torch.cuda.reset_peak_memory_stats()
                     print()

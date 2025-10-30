@@ -45,10 +45,18 @@ class BaseNewsDataset(Dataset):
         candidate_ids = [info[0] for info in impressions]
         labels = [info[2] for info in impressions]
 
-        # Label is always 0 (first positive in sorted list)
-        label = 0
+        # Check if there are any positives
+        has_positive = any(lbl == 1 for lbl in labels)
 
-        return candidate_titles, candidate_ids, labels, label
+        if has_positive:
+            # Normal case: label points to first positive (position 0)
+            label = 0
+        else:
+            # All negatives case (corrected set): use -1 as sentinel
+            # Or use a random candidate (to force uniform distribution)
+            label = 1  # Special marker for "no positive"
+
+        return candidate_titles, candidate_ids, labels, label, has_positive
 
     def _parse_history(self, idx: int) -> List[str]:
         """Parse history titles."""
@@ -110,7 +118,7 @@ class NewsDataset(BaseNewsDataset):
             - Transformer: candidate_input_ids, candidate_attention_mask,
                           history_input_ids, history_attention_mask, label
         """
-        candidate_titles, candidate_ids, labels, label = self._parse_impressions(idx)
+        candidate_titles, candidate_ids, labels, label, has_positive = self._parse_impressions(idx)
         history_list = self._parse_history(idx)
 
         if self.use_glove:

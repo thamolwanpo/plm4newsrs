@@ -26,13 +26,13 @@ removal_strategy: "fake_positive_history"
 # UNLEARNING PARAMETERS
 # ============================================
 # Learning rate (α) - step size for gradient ascent
-learning_rate: 0.005
+learning_rate: 0.01
 
 # Number of gradient ascent iterations
-num_steps: 5
+num_steps: 3
 
 # Gradient clipping for stability
-gradient_clip_val: 1.0
+gradient_clip_val: 10.0
 
 # Retain regularization (optional)
 use_retain_regularization: false
