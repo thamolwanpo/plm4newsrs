@@ -31,7 +31,7 @@ def create_ratio_split(
     df = pd.read_csv(data_path)
     print(f"Total samples: {len(df)}")
 
-    required_cols = {"user_id", "candidate_id", "label", "history_titles", "candidate_is_fake"}
+    required_cols = {"user_id", "candidate_id", "label", "history_ids", "candidate_is_fake"}
     missing_cols = required_cols - set(df.columns)
     if missing_cols:
         raise ValueError(f"Missing required columns: {missing_cols}")
@@ -52,7 +52,7 @@ def create_ratio_split(
         np.random.seed(seed + trial_idx)
 
         fake_pos_mask = (df["candidate_is_fake"] == True) & (df["label"] == 1)
-        fake_pos_df = df.loc[fake_pos_mask, ["user_id", "history_titles"]].drop_duplicates()
+        fake_pos_df = df.loc[fake_pos_mask, ["user_id", "history_ids"]].drop_duplicates()
 
         print(f"Found {len(fake_pos_df)} unique fake-positive contexts")
 
@@ -66,7 +66,7 @@ def create_ratio_split(
         print(f"Selected {n_select} contexts ({ratio*100:.1f}%)")
 
         def is_selected_context(row):
-            return (row["user_id"], row["history_titles"]) in selected_contexts_set
+            return (row["user_id"], row["history_ids"]) in selected_contexts_set
 
         forget_mask = df.apply(is_selected_context, axis=1)
 

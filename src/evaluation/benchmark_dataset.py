@@ -13,9 +13,9 @@ def convert_pairwise_to_listwise_eval(
 ) -> pd.DataFrame:
     """Convert pairwise format to listwise for evaluation."""
     listwise_rows = []
-    interaction_groups = df_pairwise.groupby(["user_id", "history_titles"])
+    interaction_groups = df_pairwise.groupby(["user_id", "history_ids"])
 
-    for (user_id, history_titles), group in tqdm(interaction_groups, desc="Converting to listwise"):
+    for (user_id, history_ids), group in tqdm(interaction_groups, desc="Converting to listwise"):
         positive_samples = group[group["label"] == 1]
         negative_samples = group[group["label"] == 0]
 
@@ -47,7 +47,7 @@ def convert_pairwise_to_listwise_eval(
             )
 
         listwise_rows.append(
-            {"user_id": user_id, "history_titles": history_titles, "impressions": impressions}
+            {"user_id": user_id, "history_ids": history_ids, "impressions": impressions}
         )
 
     return pd.DataFrame(listwise_rows)
@@ -74,8 +74,26 @@ class BenchmarkDataset(Dataset):
         self.config = config
         self.use_glove = "glove" in config.model_name.lower()
 
+        # Load news_items.csv for text lookup
+        news_items_path = csv_path.parent.parent / "news_items.csv"
+        print(f"Loading news items from: {news_items_path}")
+        self.news_items = pd.read_csv(news_items_path, index_col='item_id')
+        print(f"  Loaded {len(self.news_items)} news items")
+
     def __len__(self):
         return len(self.df)
+
+    def _get_text_by_id(self, item_id: str) -> str:
+        """Lookup text by item_id from news_items.csv."""
+        try:
+            return self.news_items.loc[item_id, 'text']
+        except KeyError:
+            # Fallback to title if text not found
+            return self.news_items.loc[item_id, 'title']
+
+    def _get_title_by_id(self, item_id: str) -> str:
+        """Lookup title by item_id from news_items.csv."""
+        return self.news_items.loc[item_id, 'title']
 
     def __getitem__(self, idx):
         row = self.df.iloc[idx]
@@ -84,25 +102,31 @@ class BenchmarkDataset(Dataset):
         # Sort so positives come first
         impressions.sort(key=lambda x: x[2], reverse=True)
 
-        # Extract candidate titles
-        candidate_titles = [info[1] for info in impressions]
+        # Extract candidate IDs and lookup texts and titles
+        candidate_ids = [info[0] for info in impressions]
+        candidate_texts = [self._get_text_by_id(item_id) for item_id in candidate_ids]
+        candidate_titles = [self._get_title_by_id(item_id) for item_id in candidate_ids]
 
-        # Parse history
+        # Parse history IDs and lookup texts and titles
         try:
-            history_list = ast.literal_eval(row["history_titles"])
+            history_ids = ast.literal_eval(row["history_ids"])
         except (ValueError, SyntaxError):
-            history_list = row["history_titles"]
+            history_ids = row["history_ids"]
 
-        if not isinstance(history_list, list):
-            history_list = [str(history_list)]
+        if not isinstance(history_ids, list):
+            history_ids = [str(history_ids)]
 
-        history_list = history_list[: self.config.max_history_length]
+        history_ids = history_ids[: self.config.max_history_length]
+        history_texts = [self._get_text_by_id(item_id) for item_id in history_ids]
+        history_titles = [self._get_title_by_id(item_id) for item_id in history_ids]
 
         if self.use_glove:
             # For GloVe: return raw text
             return {
+                "candidate_texts": candidate_texts,
                 "candidate_titles": candidate_titles,
-                "history_titles": history_list,
+                "history_texts": history_texts,
+                "history_titles": history_titles,
                 "user_id": row["user_id"],
                 "impression_data": impressions,
             }
@@ -111,7 +135,15 @@ class BenchmarkDataset(Dataset):
             if self.tokenizer is None:
                 raise ValueError("Tokenizer required for transformer models")
 
-            candidate_inputs = self.tokenizer(
+            candidate_text_inputs = self.tokenizer(
+                candidate_texts,
+                max_length=self.config.max_seq_length,
+                padding="max_length",
+                truncation=True,
+                return_tensors="pt",
+            )
+
+            candidate_title_inputs = self.tokenizer(
                 candidate_titles,
                 max_length=self.config.max_seq_length,
                 padding="max_length",
@@ -119,8 +151,16 @@ class BenchmarkDataset(Dataset):
                 return_tensors="pt",
             )
 
-            history_inputs = self.tokenizer(
-                history_list,
+            history_text_inputs = self.tokenizer(
+                history_texts,
+                max_length=self.config.max_seq_length,
+                padding="max_length",
+                truncation=True,
+                return_tensors="pt",
+            )
+
+            history_title_inputs = self.tokenizer(
+                history_titles,
                 max_length=self.config.max_seq_length,
                 padding="max_length",
                 truncation=True,
@@ -128,10 +168,14 @@ class BenchmarkDataset(Dataset):
             )
 
             return {
-                "candidate_input_ids": candidate_inputs["input_ids"],
-                "candidate_attention_mask": candidate_inputs["attention_mask"],
-                "history_input_ids": history_inputs["input_ids"],
-                "history_attention_mask": history_inputs["attention_mask"],
+                "candidate_input_ids": candidate_text_inputs["input_ids"],
+                "candidate_attention_mask": candidate_text_inputs["attention_mask"],
+                "candidate_title_input_ids": candidate_title_inputs["input_ids"],
+                "candidate_title_attention_mask": candidate_title_inputs["attention_mask"],
+                "history_input_ids": history_text_inputs["input_ids"],
+                "history_attention_mask": history_text_inputs["attention_mask"],
+                "history_title_input_ids": history_title_inputs["input_ids"],
+                "history_title_attention_mask": history_title_inputs["attention_mask"],
                 "user_id": row["user_id"],
                 "impression_data": impressions,
             }
@@ -144,10 +188,12 @@ def benchmark_collate_fn(batch):
         return None
 
     # Check if using GloVe
-    if "candidate_titles" in batch[0]:
+    if "candidate_texts" in batch[0]:
         # GloVe mode
         return {
+            "candidate_texts": [item["candidate_texts"] for item in batch],
             "candidate_titles": [item["candidate_titles"] for item in batch],
+            "history_texts": [item["history_texts"] for item in batch],
             "history_titles": [item["history_titles"] for item in batch],
             "user_id": [item["user_id"] for item in batch],
             "impression_data": [item["impression_data"] for item in batch],
@@ -160,9 +206,17 @@ def benchmark_collate_fn(batch):
             "candidate_attention_mask": torch.stack(
                 [item["candidate_attention_mask"] for item in batch]
             ),
+            "candidate_title_input_ids": torch.stack([item["candidate_title_input_ids"] for item in batch]),
+            "candidate_title_attention_mask": torch.stack(
+                [item["candidate_title_attention_mask"] for item in batch]
+            ),
             "history_input_ids": torch.stack([item["history_input_ids"] for item in batch]),
             "history_attention_mask": torch.stack(
                 [item["history_attention_mask"] for item in batch]
+            ),
+            "history_title_input_ids": torch.stack([item["history_title_input_ids"] for item in batch]),
+            "history_title_attention_mask": torch.stack(
+                [item["history_title_attention_mask"] for item in batch]
             ),
             "user_id": [item["user_id"] for item in batch],
             "impression_data": [item["impression_data"] for item in batch],

@@ -214,6 +214,7 @@ lm_models/
 outputs/
 data/gossipcop/
 data/politifact/
+data/old-politifact/
 benchmarks/
 temp_unlearning_data/
 logs/

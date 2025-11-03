@@ -25,7 +25,7 @@ use_subcategory: false  # Disabled for now
 
 # Text encoder hyperparameters
 max_title_length: 30
-max_body_length: 100
+max_body_length: 50
 
 # CNN configuration
 num_filters: 400

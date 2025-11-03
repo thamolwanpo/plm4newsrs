@@ -2,6 +2,7 @@
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from transformers import AutoModel, AutoConfig
 
 from src.embeddings import load_glove_from_file, SimpleGloVeWrapper, embed_text_with_glove
@@ -44,6 +45,19 @@ class NRMSNewsEncoder(BaseNewsEncoder):
 
         self.dropout = nn.Dropout(config.drop_rate)
 
+    def _init_weights(self, module):
+        """Initialize weights for custom layers (matching original implementation)."""
+        if isinstance(module, nn.Linear):
+            nn.init.xavier_uniform_(module.weight)
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.LayerNorm):
+            module.weight.data.fill_(1.0)
+            module.bias.data.zero_()
+        elif isinstance(module, nn.Sequential):
+            for layer in module:
+                self._init_weights(layer)
+
     def _init_glove_encoder(self):
         """Initialize GloVe-based encoder."""
         print(f"Using GloVe embeddings from: {self.config.glove_file_path}")
@@ -52,7 +66,14 @@ class NRMSNewsEncoder(BaseNewsEncoder):
         glove_dict = load_glove_from_file(self.config.glove_file_path, self.config.glove_dim)
         self.glove_model = SimpleGloVeWrapper(glove_dict, self.config.glove_dim)
 
-        self.hidden_size = self.config.glove_dim
+        # Linear projection layer (to match original GloVe implementation)
+        if hasattr(self.config, 'linear_dim'):
+            self.title_linear = nn.Linear(self.config.glove_dim, self.config.linear_dim)
+            self.hidden_size = self.config.linear_dim
+        else:
+            # Fallback: no projection
+            self.title_linear = None
+            self.hidden_size = self.config.glove_dim
 
     def _init_transformer_encoder(self):
         """Initialize transformer-based encoder (BERT/RoBERTa)."""
@@ -66,13 +87,41 @@ class NRMSNewsEncoder(BaseNewsEncoder):
 
         self.hidden_size = self.lm.config.hidden_size
 
-        # Freeze or fine-tune language model
+        # Freeze or fine-tune language model (matching original implementation)
         if not self.config.fine_tune_lm:
             print("Freezing language model parameters")
             for param in self.lm.parameters():
                 param.requires_grad = False
         else:
-            print("Fine-tuning language model")
+            # Selective layer freezing: freeze all layers except the last N layers
+            if hasattr(self.config, 'finetune_layers') and self.config.finetune_layers > 0:
+                num_layers = len(self.lm.encoder.layer)
+                print(f"Fine-tuning last {self.config.finetune_layers} layers out of {num_layers}")
+
+                for i, layer in enumerate(self.lm.encoder.layer):
+                    if i < num_layers - self.config.finetune_layers:
+                        # Freeze this layer
+                        for param in layer.parameters():
+                            param.requires_grad = False
+                    else:
+                        # Fine-tune this layer
+                        for param in layer.parameters():
+                            param.requires_grad = True
+            else:
+                # Fine-tune all layers
+                print("Fine-tuning all language model layers")
+                for param in self.lm.parameters():
+                    param.requires_grad = True
+
+        # Pooler layer (to match original BERT implementation)
+        # This processes the [CLS] token before attention layers
+        self.pooler = nn.Sequential(
+            nn.Linear(self.hidden_size, self.hidden_size),
+            nn.Dropout(0.1),
+            nn.LayerNorm(self.hidden_size),
+            nn.SiLU(),
+        )
+        self._init_weights(self.pooler)
 
     def forward(self, input_ids=None, attention_mask=None, text_list=None):
         """
@@ -95,7 +144,7 @@ class NRMSNewsEncoder(BaseNewsEncoder):
 
     def _forward_glove(self, device_indicator, text_list, mask=None):
         """
-        Forward pass for GloVe mode.
+        Forward pass for GloVe mode (matching original implementation).
 
         Args:
             device_indicator: Tensor on correct device
@@ -125,18 +174,26 @@ class NRMSNewsEncoder(BaseNewsEncoder):
             if self.store_intermediate_outputs:
                 self._store_output("word_embeddings", seq_emb)
 
+            # Linear projection (matching original: title_linear)
+            if self.title_linear is not None:
+                seq_emb = self.title_linear(seq_emb)
+                seq_emb = F.dropout(seq_emb, p=self.config.drop_rate, training=self.training)
+
             # Multi-head self-attention over words
             word_vecs, attn_weights = self.word_self_attention(
                 seq_emb
-            )  # (1, max_seq_length, embed_dim)
+            )  # (1, max_seq_length, hidden_dim)
+
+            # Dropout after self-attention (matching original)
+            word_vecs = F.dropout(word_vecs, p=self.config.drop_rate, training=self.training)
 
             if self.store_intermediate_outputs:
                 self._store_output("self_attention_output", word_vecs)
                 self._store_output("self_attention_weights", attn_weights)
 
             # Additive attention for aggregation
-            news_vec, word_attn_weights = self.word_attention(word_vecs)  # (1, embed_dim)
-            news_vec = news_vec.squeeze(0)  # (embed_dim,)
+            news_vec, word_attn_weights = self.word_attention(word_vecs)  # (1, hidden_dim)
+            news_vec = news_vec.squeeze(0)  # (hidden_dim,)
 
             if self.store_intermediate_outputs:
                 self._store_output("word_attention_weights", word_attn_weights)
@@ -152,7 +209,11 @@ class NRMSNewsEncoder(BaseNewsEncoder):
 
     def _forward_transformer(self, input_ids, attention_mask):
         """
-        Forward pass for transformer mode.
+        Forward pass for transformer mode (matching original BERT implementation).
+
+        NOTE: This matches the original implementation which uses only [CLS] token
+        and applies self-attention to a single vector. This is architecturally
+        questionable but kept for experiment replication.
 
         Args:
             input_ids: (batch, seq_len)
@@ -168,25 +229,42 @@ class NRMSNewsEncoder(BaseNewsEncoder):
         if self.store_intermediate_outputs:
             self._store_output("lm_embeddings", word_embeddings)
 
-        # Multi-head self-attention over words
-        word_vecs, attn_weights = self.word_self_attention(
-            word_embeddings, mask=attention_mask
-        )  # (batch, seq_len, hidden_size)
+        # Extract [CLS] token (matching original BERT implementation)
+        cls_token = word_embeddings[:, 0, :]  # (batch, hidden_size)
+
+        # Apply pooler to [CLS] token
+        news_vector = self.pooler(cls_token)  # (batch, hidden_size)
 
         if self.store_intermediate_outputs:
-            self._store_output("self_attention_output", word_vecs)
+            self._store_output("cls_pooled", news_vector)
+
+        # Add sequence dimension for self-attention (operates on single token)
+        news_vector = news_vector.unsqueeze(1)  # (batch, 1, hidden_size)
+
+        # Multi-head self-attention (on single [CLS] token vector)
+        multihead_news_vector, attn_weights = self.word_self_attention(
+            news_vector
+        )  # (batch, 1, hidden_size)
+
+        # Dropout after self-attention (matching original)
+        multihead_news_vector = F.dropout(
+            multihead_news_vector, p=self.config.drop_rate, training=self.training
+        )
+
+        if self.store_intermediate_outputs:
+            self._store_output("self_attention_output", multihead_news_vector)
             self._store_output("self_attention_weights", attn_weights)
 
-        # Additive attention for word aggregation
-        news_embedding, word_attn_weights = self.word_attention(
-            word_vecs, mask=attention_mask
+        # Additive attention for final aggregation (on single token)
+        final_news_vector, word_attn_weights = self.word_attention(
+            multihead_news_vector
         )  # (batch, hidden_size)
 
         if self.store_intermediate_outputs:
             self._store_output("word_attention_weights", word_attn_weights)
-            self._store_output("final_news_embedding", news_embedding)
+            self._store_output("final_news_embedding", final_news_vector)
 
-        return news_embedding
+        return final_news_vector
 
     @property
     def output_dim(self) -> int:

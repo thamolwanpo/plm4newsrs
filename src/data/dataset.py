@@ -29,8 +29,26 @@ class BaseNewsDataset(Dataset):
 
         self.config = config
 
+        # Load news_items.csv for text lookup
+        news_items_path = csv_path.parent.parent / "news_items.csv"
+        print(f"Loading news items from: {news_items_path}")
+        self.news_items = pd.read_csv(news_items_path, index_col='item_id')
+        print(f"  Loaded {len(self.news_items)} news items")
+
     def __len__(self):
         return len(self.df)
+
+    def _get_text_by_id(self, item_id: str) -> str:
+        """Lookup text by item_id from news_items.csv."""
+        try:
+            return self.news_items.loc[item_id, 'text']
+        except KeyError:
+            # Fallback to title if text not found
+            return self.news_items.loc[item_id, 'title']
+
+    def _get_title_by_id(self, item_id: str) -> str:
+        """Lookup title by item_id from news_items.csv."""
+        return self.news_items.loc[item_id, 'title']
 
     def _parse_impressions(self, idx: int) -> tuple:
         """Parse impressions and sort by label."""
@@ -40,9 +58,10 @@ class BaseNewsDataset(Dataset):
         # Sort so positives come first
         impressions.sort(key=lambda x: x[2], reverse=True)
 
-        # Extract candidate titles and other info
-        candidate_titles = [info[1] for info in impressions]
+        # Extract candidate texts, titles and other info
         candidate_ids = [info[0] for info in impressions]
+        candidate_texts = [self._get_text_by_id(item_id) for item_id in candidate_ids]
+        candidate_titles = [self._get_title_by_id(item_id) for item_id in candidate_ids]
         labels = [info[2] for info in impressions]
 
         # Check if there are any positives
@@ -56,24 +75,28 @@ class BaseNewsDataset(Dataset):
             # Or use a random candidate (to force uniform distribution)
             label = 1  # Special marker for "no positive"
 
-        return candidate_titles, candidate_ids, labels, label, has_positive
+        return candidate_texts, candidate_titles, candidate_ids, labels, label, has_positive
 
-    def _parse_history(self, idx: int) -> List[str]:
-        """Parse history titles."""
+    def _parse_history(self, idx: int) -> tuple:
+        """Parse history and return both text and titles."""
         row = self.df.iloc[idx]
 
         try:
-            history_list = ast.literal_eval(row["history_titles"])
+            history_ids = ast.literal_eval(row["history_ids"])
         except (ValueError, SyntaxError):
-            history_list = row["history_titles"]
+            history_ids = row["history_ids"]
 
-        if not isinstance(history_list, list):
-            history_list = [str(history_list)]
+        if not isinstance(history_ids, list):
+            history_ids = [str(history_ids)]
 
         # Truncate to max history length
-        history_list = history_list[: self.config.max_history_length]
+        history_ids = history_ids[: self.config.max_history_length]
 
-        return history_list
+        # Lookup text and title for each history item
+        history_texts = [self._get_text_by_id(item_id) for item_id in history_ids]
+        history_titles = [self._get_title_by_id(item_id) for item_id in history_ids]
+
+        return history_texts, history_titles
 
 
 class NewsDataset(BaseNewsDataset):
@@ -114,34 +137,49 @@ class NewsDataset(BaseNewsDataset):
 
         Returns:
             Dict with different keys depending on model type:
-            - GloVe: candidate_titles, history_titles, label
+            - GloVe: candidate_texts, candidate_titles, history_texts, history_titles, label
             - Transformer: candidate_input_ids, candidate_attention_mask,
-                          history_input_ids, history_attention_mask, label
+                          candidate_title_input_ids, candidate_title_attention_mask,
+                          history_input_ids, history_attention_mask,
+                          history_title_input_ids, history_title_attention_mask, label
         """
-        candidate_titles, candidate_ids, labels, label, has_positive = self._parse_impressions(idx)
-        history_list = self._parse_history(idx)
+        candidate_texts, candidate_titles, candidate_ids, labels, label, has_positive = self._parse_impressions(idx)
+        history_texts, history_titles = self._parse_history(idx)
 
         if self.use_glove:
-            return self._get_glove_item(candidate_titles, history_list, label)
+            return self._get_glove_item(candidate_texts, candidate_titles, history_texts, history_titles, label)
         else:
-            return self._get_transformer_item(candidate_titles, history_list, label)
+            return self._get_transformer_item(candidate_texts, candidate_titles, history_texts, history_titles, label)
 
     def _get_glove_item(
-        self, candidate_titles: List[str], history_list: List[str], label: int
+        self, candidate_texts: List[str], candidate_titles: List[str],
+        history_texts: List[str], history_titles: List[str], label: int
     ) -> Dict[str, Any]:
         """Get item for GloVe models (raw text)."""
         return {
+            "candidate_texts": candidate_texts,  # List of strings
             "candidate_titles": candidate_titles,  # List of strings
-            "history_titles": history_list,  # List of strings
+            "history_texts": history_texts,  # List of strings
+            "history_titles": history_titles,  # List of strings
             "label": torch.tensor(label, dtype=torch.long),
         }
 
     def _get_transformer_item(
-        self, candidate_titles: List[str], history_list: List[str], label: int
+        self, candidate_texts: List[str], candidate_titles: List[str],
+        history_texts: List[str], history_titles: List[str], label: int
     ) -> Dict[str, Any]:
         """Get item for Transformer models (tokenized)."""
-        # Tokenize candidates
-        candidate_inputs = self.tokenizer(
+        # Tokenize candidate texts
+        candidate_text_inputs = self.tokenizer(
+            candidate_texts,
+            max_length=self.config.max_seq_length,
+            padding="max_length",
+            truncation=True,
+            return_tensors="pt",
+        )
+
+        # Tokenize candidate titles
+        candidate_title_inputs = self.tokenizer(
             candidate_titles,
             max_length=self.config.max_seq_length,
             padding="max_length",
@@ -149,9 +187,18 @@ class NewsDataset(BaseNewsDataset):
             return_tensors="pt",
         )
 
-        # Tokenize history
-        history_inputs = self.tokenizer(
-            history_list,
+        # Tokenize history texts
+        history_text_inputs = self.tokenizer(
+            history_texts,
+            max_length=self.config.max_seq_length,
+            padding="max_length",
+            truncation=True,
+            return_tensors="pt",
+        )
+
+        # Tokenize history titles
+        history_title_inputs = self.tokenizer(
+            history_titles,
             max_length=self.config.max_seq_length,
             padding="max_length",
             truncation=True,
@@ -159,9 +206,13 @@ class NewsDataset(BaseNewsDataset):
         )
 
         return {
-            "candidate_input_ids": candidate_inputs["input_ids"],
-            "candidate_attention_mask": candidate_inputs["attention_mask"],
-            "history_input_ids": history_inputs["input_ids"],
-            "history_attention_mask": history_inputs["attention_mask"],
+            "candidate_input_ids": candidate_text_inputs["input_ids"],
+            "candidate_attention_mask": candidate_text_inputs["attention_mask"],
+            "candidate_title_input_ids": candidate_title_inputs["input_ids"],
+            "candidate_title_attention_mask": candidate_title_inputs["attention_mask"],
+            "history_input_ids": history_text_inputs["input_ids"],
+            "history_attention_mask": history_text_inputs["attention_mask"],
+            "history_title_input_ids": history_title_inputs["input_ids"],
+            "history_title_attention_mask": history_title_inputs["attention_mask"],
             "label": torch.tensor(label, dtype=torch.long),
         }

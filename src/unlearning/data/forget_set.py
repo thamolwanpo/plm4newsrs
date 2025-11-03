@@ -48,7 +48,7 @@ class ForgetSet:
 
         required_cols = {
             "user_id",
-            "history_titles",
+            "history_ids",
             "candidate_id",
             "candidate_title",
             "label",

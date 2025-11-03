@@ -63,14 +63,16 @@ class RecommenderModel(nn.Module):
 
         Args:
             batch: Dictionary with keys (transformer mode):
-                - candidate_input_ids: (batch, num_candidates, seq_len)
-                - candidate_attention_mask: (batch, num_candidates, seq_len)
-                - history_input_ids: (batch, history_len, seq_len)
-                - history_attention_mask: (batch, history_len, seq_len)
+                - candidate_title_input_ids: (batch, num_candidates, seq_len)
+                - candidate_title_attention_mask: (batch, num_candidates, seq_len)
+                - history_title_input_ids: (batch, history_len, seq_len)
+                - history_title_attention_mask: (batch, history_len, seq_len)
+                (Note: also has candidate_input_ids/history_input_ids for text/body, but Simple uses titles)
             OR (GloVe mode):
                 - candidate_titles: List[List[str]]
                 - history_titles: List[List[str]]
                 - device_indicator: tensor on correct device
+                (Note: also has candidate_texts/history_texts for text/body, but Simple uses titles)
 
         Returns:
             scores: (batch, num_candidates) - click probability scores
@@ -159,9 +161,9 @@ class RecommenderModel(nn.Module):
             candidate_embeddings: (batch, num_candidates, hidden_size)
             history_embeddings: (batch, history_len, hidden_size)
         """
-        # Encode candidates
-        candidate_input_ids = batch["candidate_input_ids"]
-        candidate_attention_mask = batch["candidate_attention_mask"]
+        # Encode candidates - use titles for Simple model
+        candidate_input_ids = batch["candidate_title_input_ids"]
+        candidate_attention_mask = batch["candidate_title_attention_mask"]
         batch_size, num_candidates, seq_len = candidate_input_ids.shape
 
         # Flatten candidates for batch encoding
@@ -178,9 +180,9 @@ class RecommenderModel(nn.Module):
             batch_size, num_candidates, -1
         )  # (batch, num_candidates, hidden_size)
 
-        # Encode history
-        history_input_ids = batch["history_input_ids"]
-        history_attention_mask = batch["history_attention_mask"]
+        # Encode history - use titles for Simple model
+        history_input_ids = batch["history_title_input_ids"]
+        history_attention_mask = batch["history_title_attention_mask"]
         batch_size, history_len, seq_len = history_input_ids.shape
 
         # Flatten history for batch encoding

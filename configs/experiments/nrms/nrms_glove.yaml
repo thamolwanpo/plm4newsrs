@@ -2,6 +2,7 @@
 dataset: "politifact"
 experiment_name: "nrms_model"
 model_type: "clean"
+trial: 0
 
 # Architecture
 architecture: "nrms"
@@ -16,10 +17,11 @@ glove_file_path: "lm_models/glove.42B.300d.txt"
 glove_model: "glove-42B-300"
 glove_dim: 300
 glove_aggregation: "attention"
+linear_dim: 300  # Dimension after linear projection (set equal to glove_dim for no change)
 
 # Architecture hyperparameters
-max_seq_length: 50
-max_history_length: 50
+max_seq_length: 30
+max_history_length: 30
 
 # Multi-head self-attention
 # 300 is divisible by: 1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 25, 30, 50, 60, 75, 100, 150, 300
