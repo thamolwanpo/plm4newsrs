@@ -2,14 +2,17 @@
 dataset: "politifact"
 experiment_name: "naml_model"
 model_type: "clean"
+trial: 0
 
 # Architecture
 architecture: "naml"
+word_embedding_dim: 768 # BERT embedding size
 
 # Model configuration
 model_name: "bert-base-uncased"
 use_pretrained_lm: true
 fine_tune_lm: true
+finetune_layers: 2 # Fine-tune last 2 layers of BERT
 
 # GloVe-specific (not used with BERT)
 glove_file_path: "lm_models/glove.42B.300d.txt"
@@ -19,7 +22,7 @@ glove_aggregation: "attention"
 
 # Multi-view configuration (which views to use)
 use_title: true
-use_body: false  # Disabled for now
+use_body: true
 use_category: false  # Disabled for now
 use_subcategory: false  # Disabled for now
 
@@ -27,9 +30,12 @@ use_subcategory: false  # Disabled for now
 max_title_length: 30
 max_body_length: 100
 
+# For additive attention
+query_vector_dim: 200
+
 # CNN configuration
-num_filters: 400
-window_sizes: [3, 4, 5]
+num_filters: 300  # Must match attention_hidden_dim (200) for dimension compatibility
+window_sizes: [3]  # Single window size as per reference implementation
 
 # Category/subcategory configuration (if enabled)
 num_categories: 100
@@ -43,7 +49,7 @@ max_history_length: 50
 drop_rate: 0.2
 
 # Training hyperparameters
-epochs: 15  # More epochs since only training attention
+epochs: 3 
 train_batch_size: 32  # Larger batch since less memory needed
 val_batch_size: 64
 learning_rate: 2.0e-5

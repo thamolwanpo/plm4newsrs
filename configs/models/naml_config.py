@@ -25,16 +25,19 @@ class NAMLConfig(ModelConfig):
     use_body: bool = False
     use_category: bool = False
     use_subcategory: bool = False
+    query_vector_dim: int = 200  # For additive attention
+    word_embedding_dim: int = 300  # For CNN kernel size
 
     # Text encoders
     title_embedding_dim: int = 768
     body_embedding_dim: int = 768
     max_title_length: int = 30
     max_body_length: int = 100
+    maintain_word_embedding_dim: int = 300  # For CNN kernel size (matching reference)
 
     # CNN filters
-    num_filters: int = 400
-    window_sizes: List[int] = (3, 4, 5)
+    num_filters: int = 200  # Must match attention_hidden_dim for dimension compatibility
+    window_sizes: List[int] = (3,)  # Single window size as per reference
 
     # Category/subcategory embeddings
     num_categories: int = 100

@@ -2,308 +2,344 @@
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from transformers import AutoModel, AutoConfig
 
 from src.embeddings import load_glove_from_file, SimpleGloVeWrapper, embed_text_with_glove
 from src.models.components import BaseNewsEncoder, CNNEncoder, AdditiveAttention, CategoryEncoder
 
 
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
+
+def init_weights(m: nn.Module):
+    """Initialize weights following reference implementation."""
+    if isinstance(m, nn.Embedding):
+        nn.init.xavier_uniform_(m.weight.data)
+    if isinstance(m, nn.Linear):
+        nn.init.xavier_uniform_(m.weight.data)
+        if m.bias is not None:
+            nn.init.zeros_(m.bias)
+    if isinstance(m, nn.LayerNorm):
+        m.weight.data.fill_(1.0)
+        m.bias.data.zero_()
+
+
+class BERTTextEncoder(nn.Module):
+    """
+    TextEncoder for BERT (matches reference exactly).
+    Uses [CLS] token → pooler → CNN → additive attention.
+    """
+    def __init__(self, word_embedding_dim, num_filters, window_size,
+                 query_vector_dim, dropout_probability, config):
+        super(BERTTextEncoder, self).__init__()
+        self.config = config
+        self.dropout_probability = dropout_probability
+
+        # Load BERT
+        bert = AutoModel.from_pretrained(config.model_name)
+        self.dim = bert.config.hidden_size
+        self.bert = bert
+
+        # Freeze or fine-tune language model (matching original implementation)
+        if not self.config.fine_tune_lm:
+            print("Freezing language model parameters")
+            for param in self.bert.parameters():
+                param.requires_grad = False
+        else:
+            # Selective layer freezing: freeze all layers except the last N layers
+            if hasattr(self.config, 'finetune_layers') and self.config.finetune_layers > 0:
+                num_layers = len(self.bert.encoder.layer)
+                print(f"Fine-tuning last {self.config.finetune_layers} layers out of {num_layers}")
+
+                for i, layer in enumerate(self.bert.encoder.layer):
+                    if i < num_layers - self.config.finetune_layers:
+                        # Freeze this layer
+                        for param in layer.parameters():
+                            param.requires_grad = False
+                    else:
+                        # Fine-tune this layer
+                        for param in layer.parameters():
+                            param.requires_grad = True
+            else:
+                # Fine-tune all layers
+                print("Fine-tuning all language model layers")
+                for param in self.bert.parameters():
+                    param.requires_grad = True
+
+        # Pooler layer - projects to maintain_word_embedding_dim
+        self.pooler = nn.Sequential(
+            nn.Linear(self.dim, self.dim),
+            nn.Dropout(0.1),
+            nn.LayerNorm(self.dim),
+            nn.SiLU(),
+        )
+        self.pooler.apply(init_weights)
+
+        # CNN on [CLS] token
+        self.CNN = nn.Conv2d(1, num_filters, (window_size, word_embedding_dim),
+                             padding=(int((window_size - 1) / 2), 0))
+
+        # Additive attention (input_dim, hidden_dim)
+        self.additive_attention = AdditiveAttention(num_filters, query_vector_dim)
+
+    def forward(self, text):
+        """
+        Args:
+            text: (batch, 2, seq_len) - stacked [input_ids, attention_mask]
+                  OR (batch, seq_len) if only input_ids provided
+        Returns:
+            text_vector: (batch, num_filters)
+        """
+        # Handle different input formats
+        if text.dim() == 3:
+            # Format: (batch, 2, seq_len)
+            news_input = {
+                "input_ids": text[:, 0].long().to(device),
+                "attention_mask": text[:, 1].long().to(device)
+            }
+        elif text.dim() == 2:
+            # Format: (batch, seq_len) - only input_ids
+            news_input = {
+                "input_ids": text.long().to(device),
+                "attention_mask": (text != 0).long().to(device)  # Auto-generate mask
+            }
+        else:
+            raise ValueError(f"Expected 2D or 3D input, got {text.dim()}D tensor")
+
+        # Get all token embeddings
+        text_vector = self.bert(**news_input)[0]  # (batch, seq_len, hidden_dim)
+
+        # Extract [CLS] token
+        text_vector = text_vector[:, 0]  # (batch, hidden_dim)
+
+        # Apply pooler
+        text_vector = self.pooler(text_vector)  # (batch, hidden_dim)
+
+        # Reshape for CNN and apply
+        convoluted_text_vector = self.CNN(
+            text_vector.unsqueeze(1).unsqueeze(2).float()
+        ).squeeze(dim=3)  # (batch, num_filters, 1)
+
+        # ReLU + dropout
+        activated_text_vector = F.dropout(
+            F.relu(convoluted_text_vector),
+            p=self.dropout_probability,
+            training=self.training
+        )
+
+        # Additive attention
+        text_vector, _ = self.additive_attention(
+            activated_text_vector.transpose(1, 2)
+        )  # (batch, num_filters)
+
+        return text_vector
+
+
+class GloVeTextEncoder(nn.Module):
+    """
+    TextEncoder for GloVe (matches reference exactly).
+    Uses word embeddings → linear → CNN → additive attention.
+    """
+    def __init__(self, word_embedding_dim, num_filters, window_size,
+                 query_vector_dim, dropout_probability, linear_dim, maintain_word_embedding_dim):
+        super(GloVeTextEncoder, self).__init__()
+        self.dropout_probability = dropout_probability
+
+        # Projection layer
+        self.linear = nn.Linear(word_embedding_dim, linear_dim)
+
+        # CNN
+        self.CNN = nn.Conv2d(1, num_filters, (window_size, word_embedding_dim),
+                             padding=(int((window_size - 1) / 2), 0))
+
+        # Additive attention (input_dim, hidden_dim)
+        self.additive_attention = AdditiveAttention(num_filters, query_vector_dim)
+
+    def forward(self, text):
+        """
+        Args:
+            text: (batch, num_words, word_embedding_dim)
+        Returns:
+            text_vector: (batch, num_filters)
+        """
+        # Linear projection
+        projected_text_embed = self.linear(text.float())
+        text_vector = F.dropout(
+            projected_text_embed,
+            p=self.dropout_probability,
+            training=self.training
+        )
+
+        # CNN
+        convoluted_text_vector = self.CNN(
+            text_vector.unsqueeze(dim=1)
+        ).squeeze(dim=3)  # (batch, num_filters, num_words)
+
+        # ReLU + dropout
+        activated_text_vector = F.dropout(
+            F.relu(convoluted_text_vector),
+            p=self.dropout_probability,
+            training=self.training
+        )
+
+        # Additive attention
+        text_vector, _ = self.additive_attention(
+            activated_text_vector.transpose(1, 2)
+        )  # (batch, num_filters)
+
+        return text_vector
+
+
+class ElementEncoder(nn.Module):
+    """Element encoder for category/subcategory (matches reference)."""
+    def __init__(self, embedding, linear_input_dim, linear_output_dim):
+        super(ElementEncoder, self).__init__()
+        self.embedding = embedding
+        self.linear = nn.Linear(linear_input_dim, linear_output_dim)
+
+    def forward(self, element):
+        return F.relu(self.linear(self.embedding(element)))
+
+
 class NAMLNewsEncoder(BaseNewsEncoder):
     """
     NAML News Encoder with Attentive Multi-View Learning.
 
+    Matches reference implementation with support for both BERT and GloVe.
+
     Architecture:
-    1. Title Encoder: Word embeddings → CNN → Word-level attention
-    2. Body Encoder: Word embeddings → CNN → Word-level attention (optional)
-    3. Category Encoder: Category embedding → Dense layer (optional)
-    4. Subcategory Encoder: Subcategory embedding → Dense layer (optional)
-    5. View-level Attention: Combines all views with learned weights
+    - BERT: [CLS] token → pooler → CNN → additive attention
+    - GloVe: embeddings → linear → CNN → additive attention
+    - Category/Subcategory: embedding → linear
+    - Final: multi-view attention aggregation
 
     Based on: "Neural News Recommendation with Attentive Multi-View Learning"
     (Wu et al., IJCAI 2019)
     """
 
-    def __init__(self, config):
-        super().__init__(config)
-        self.use_glove = "glove" in config.model_name.lower()
+    def _init_glove_encoder(self):
+        """Initialize GloVe-based encoder."""
+        print(f"Using GloVe embeddings from: {self.config.glove_file_path}")
 
-        # Track which views are enabled
+        # Load GloVe from file
+        glove_dict = load_glove_from_file(self.config.glove_file_path, self.config.glove_dim)
+        self.glove_model = SimpleGloVeWrapper(glove_dict, self.config.glove_dim)
+
+        # Linear projection layer (to match original GloVe implementation)
+        if hasattr(self.config, 'linear_dim'):
+            self.title_linear = nn.Linear(self.config.glove_dim, self.config.linear_dim)
+            self.hidden_size = self.config.linear_dim
+        else:
+            # Fallback: no projection
+            self.title_linear = None
+            self.hidden_size = self.config.glove_dim
+
+    def __init__(self, config):
+        super(NAMLNewsEncoder, self).__init__(config)
+        self.config = config
+
+        # Determine which views are enabled
         self.use_title = config.use_title
         self.use_body = config.use_body
         self.use_category = config.use_category
         self.use_subcategory = config.use_subcategory
 
-        # Count active views for view-level attention
-        self.num_views = sum(
-            [self.use_title, self.use_body, self.use_category, self.use_subcategory]
-        )
-
-        if self.num_views == 0:
+        # Count active views
+        num_views = sum([self.use_title, self.use_body, self.use_category, self.use_subcategory])
+        if num_views == 0:
             raise ValueError("At least one view must be enabled")
 
-        # Initialize embeddings
-        if self.use_glove:
-            self._init_glove_embeddings()
+        # Determine if using BERT or GloVe
+        self.use_bert = "glove" not in config.model_name.lower()
+
+        if not self.use_bert:
+            self._init_glove_encoder()
+
+        # Create text encoders for enabled views
+        self.text_encoders = nn.ModuleDict()
+
+        if self.use_bert:
+            # BERT text encoders
+            if self.use_title:
+                self.text_encoders['title'] = BERTTextEncoder(
+                    word_embedding_dim=config.word_embedding_dim,
+                    num_filters=config.num_filters,
+                    window_size=config.window_sizes[0] if isinstance(config.window_sizes, (list, tuple)) else 3,
+                    query_vector_dim=config.query_vector_dim,
+                    dropout_probability=config.drop_rate,
+                    config=config
+                )
+            if self.use_body:
+                self.text_encoders['text'] = BERTTextEncoder(
+                    word_embedding_dim=config.word_embedding_dim,
+                    num_filters=config.num_filters,
+                    window_size=config.window_sizes[0] if isinstance(config.window_sizes, (list, tuple)) else 3,
+                    query_vector_dim=config.query_vector_dim,
+                    dropout_probability=config.drop_rate,
+                    config=config
+                )
         else:
-            self._init_transformer_embeddings()
+            # GloVe text encoders
+            if self.use_title:
+                self.text_encoders['title'] = GloVeTextEncoder(
+                    word_embedding_dim=config.word_embedding_dim,
+                    num_filters=config.num_filters,
+                    window_size=config.window_sizes[0] if isinstance(config.window_sizes, (list, tuple)) else 3,
+                    query_vector_dim=config.query_vector_dim,
+                    dropout_probability=config.drop_rate,
+                    linear_dim=config.word_embedding_dim,
+                    maintain_word_embedding_dim=config.word_embedding_dim
+                )
+            if self.use_body:
+                self.text_encoders['text'] = GloVeTextEncoder(
+                    word_embedding_dim=config.word_embedding_dim,
+                    num_filters=config.num_filters,
+                    window_size=config.window_sizes[0] if isinstance(config.window_sizes, (list, tuple)) else 3,
+                    query_vector_dim=config.query_vector_dim,
+                    dropout_probability=config.drop_rate,
+                    linear_dim=config.word_embedding_dim,
+                    maintain_word_embedding_dim=config.word_embedding_dim
+                )
 
-        # Title encoder (always enabled in practice, but configurable)
-        if self.use_title:
-            self.title_cnn = CNNEncoder(
-                input_dim=self.embedding_dim,
-                num_filters=config.num_filters,
-                window_sizes=config.window_sizes,
-                dropout=config.drop_rate,
-            )
-            # CNN output is (num_filters * num_windows), project to num_filters
-            cnn_output_dim = config.num_filters * len(config.window_sizes)
-            self.title_projection = nn.Linear(cnn_output_dim, config.num_filters)
+        # Category embedding (shared)
+        category_embedding = nn.Embedding(
+            config.num_categories,
+            config.category_embedding_dim,
+            padding_idx=0
+        )
 
-        # Body encoder (optional)
-        if self.use_body:
-            self.body_cnn = CNNEncoder(
-                input_dim=self.embedding_dim,
-                num_filters=config.num_filters,
-                window_sizes=config.window_sizes,
-                dropout=config.drop_rate,
-            )
-            cnn_output_dim = config.num_filters * len(config.window_sizes)
-            self.body_projection = nn.Linear(cnn_output_dim, config.num_filters)
+        # Create element encoders for enabled views
+        self.element_encoders = nn.ModuleDict()
 
-        # Category encoder (optional)
         if self.use_category:
-            self.category_encoder = CategoryEncoder(
-                num_categories=config.num_categories, embedding_dim=config.category_embedding_dim
-            )
-            self.category_dense = nn.Sequential(
-                nn.Linear(config.category_embedding_dim, config.num_filters), nn.ReLU()
+            self.element_encoders['category'] = ElementEncoder(
+                embedding=category_embedding,
+                linear_input_dim=config.category_embedding_dim,
+                linear_output_dim=config.num_filters
             )
 
-        # Subcategory encoder (optional)
         if self.use_subcategory:
-            self.subcategory_encoder = CategoryEncoder(
-                num_categories=config.num_subcategories,
-                embedding_dim=config.subcategory_embedding_dim,
-            )
-            self.subcategory_dense = nn.Sequential(
-                nn.Linear(config.subcategory_embedding_dim, config.num_filters), nn.ReLU()
+            self.element_encoders['subcategory'] = ElementEncoder(
+                embedding=category_embedding,
+                linear_input_dim=config.category_embedding_dim,
+                linear_output_dim=config.num_filters
             )
 
-        # View-level attention
-        # All views output to the same dimension (num_filters)
-        # Use a simple attention mechanism for view aggregation
-        self.view_attention_query = nn.Parameter(torch.randn(config.num_filters))
-        self.view_attention_proj = nn.Linear(config.num_filters, config.attention_hidden_dim)
+        # Final attention (if multiple views)
+        if num_views > 1:
+            self.final_attention = AdditiveAttention(
+                config.num_filters,
+                config.query_vector_dim
+            )
+        else:
+            self.final_attention = None
 
-        self.dropout = nn.Dropout(config.drop_rate)
         self.output_size = config.num_filters
 
-        # For analysis: store view representations before aggregation
+        # For debugging: store view representations
         self.store_view_representations = False
         self.last_view_representations = {}
-
-    def _init_glove_embeddings(self):
-        """Initialize GloVe-based embeddings."""
-        print(f"Using GloVe embeddings from: {self.config.glove_file_path}")
-        glove_dict = load_glove_from_file(self.config.glove_file_path, self.config.glove_dim)
-        self.glove_model = SimpleGloVeWrapper(glove_dict, self.config.glove_dim)
-        self.embedding_dim = self.config.glove_dim
-
-    def _init_transformer_embeddings(self):
-        """Initialize transformer-based embeddings (BERT/RoBERTa)."""
-        if self.config.use_pretrained_lm:
-            print(f"Loading pretrained model: {self.config.model_name}")
-            self.lm = AutoModel.from_pretrained(self.config.model_name)
-        else:
-            print(f"Initializing model from scratch: {self.config.model_name}")
-            lm_config = AutoConfig.from_pretrained(self.config.model_name)
-            self.lm = AutoModel.from_config(lm_config)
-
-        self.embedding_dim = self.lm.config.hidden_size
-
-        # Freeze or fine-tune language model
-        if not self.config.fine_tune_lm:
-            print("Freezing language model parameters")
-            for param in self.lm.parameters():
-                param.requires_grad = False
-        else:
-            print("Fine-tuning language model")
-
-    def _get_text_embeddings_glove(self, text_list, max_length, device):
-        """
-        Get GloVe embeddings for a list of texts.
-
-        Args:
-            text_list: List[str]
-            max_length: Maximum sequence length
-            device: Device to place tensors on
-
-        Returns:
-            embeddings: (batch, max_length, embed_dim)
-        """
-        batch_embeddings = []
-
-        for text in text_list:
-            # Get sequence embeddings
-            seq_emb = embed_text_with_glove(
-                text, self.glove_model, max_length, aggregation="sequence"
-            )  # (max_length, embed_dim)
-
-            seq_emb = torch.tensor(seq_emb, dtype=torch.float32, device=device)
-            batch_embeddings.append(seq_emb)
-
-        return torch.stack(batch_embeddings)  # (batch, max_length, embed_dim)
-
-    def _get_text_embeddings_transformer(self, input_ids, attention_mask):
-        """
-        Get transformer embeddings.
-
-        Args:
-            input_ids: (batch, seq_len)
-            attention_mask: (batch, seq_len)
-
-        Returns:
-            embeddings: (batch, seq_len, hidden_size)
-        """
-        lm_output = self.lm(input_ids=input_ids, attention_mask=attention_mask)
-        embeddings = lm_output.last_hidden_state  # (batch, seq_len, hidden_size)
-
-        # Store for analysis
-        if self.store_intermediate_outputs:
-            self._store_output("lm_embeddings", embeddings)
-
-        return embeddings
-
-    def _aggregate_views(self, view_representations):
-        """
-        Aggregate multiple view representations using attention.
-
-        Args:
-            view_representations: List of tensors, each (batch, num_filters)
-
-        Returns:
-            aggregated: (batch, num_filters)
-        """
-        # Store individual views for analysis
-        if self.store_view_representations:
-            for i, view_repr in enumerate(view_representations):
-                self.last_view_representations[f"view_{i}"] = view_repr.detach().cpu()
-
-        if len(view_representations) == 1:
-            return view_representations[0]
-
-        # Stack views: (batch, num_views, num_filters)
-        views = torch.stack(view_representations, dim=1)
-        batch_size, num_views, num_filters = views.shape
-
-        # Calculate attention scores for each view
-        # Project views to hidden space
-        projected = torch.tanh(self.view_attention_proj(views))  # (batch, num_views, hidden_dim)
-
-        # Calculate attention scores using query vector
-        query = self.view_attention_query.unsqueeze(0).unsqueeze(0)  # (1, 1, num_filters)
-
-        # Simple dot product attention
-        scores = torch.matmul(views, self.view_attention_query)  # (batch, num_views)
-        attention_weights = torch.softmax(scores, dim=1)  # (batch, num_views)
-
-        # Store view attention weights for analysis
-        if self.store_intermediate_outputs:
-            self._store_output("view_attention_weights", attention_weights)
-
-        # Weighted sum of views
-        attention_weights = attention_weights.unsqueeze(-1)  # (batch, num_views, 1)
-        aggregated = (views * attention_weights).sum(dim=1)  # (batch, num_filters)
-
-        return aggregated
-
-    def _encode_title(self, title_embeddings, title_mask=None):
-        """
-        Encode title with CNN and projection.
-
-        Args:
-            title_embeddings: (batch, max_title_len, embed_dim)
-            title_mask: (batch, max_title_len) - optional
-
-        Returns:
-            title_repr: (batch, num_filters)
-        """
-        # CNN encoding
-        cnn_output = self.title_cnn(title_embeddings)  # (batch, num_filters * num_windows)
-
-        if self.store_intermediate_outputs:
-            self._store_output("title_cnn_output", cnn_output)
-
-        # Project to num_filters dimension
-        title_repr = self.title_projection(cnn_output)  # (batch, num_filters)
-
-        if self.store_intermediate_outputs:
-            self._store_output("title_representation", title_repr)
-
-        return title_repr
-
-    def _encode_body(self, body_embeddings, body_mask=None):
-        """
-        Encode body with CNN and projection.
-
-        Args:
-            body_embeddings: (batch, max_body_len, embed_dim)
-            body_mask: (batch, max_body_len) - optional
-
-        Returns:
-            body_repr: (batch, num_filters)
-        """
-        # CNN encoding
-        cnn_output = self.body_cnn(body_embeddings)  # (batch, num_filters * num_windows)
-
-        if self.store_intermediate_outputs:
-            self._store_output("body_cnn_output", cnn_output)
-
-        # Project to num_filters dimension
-        body_repr = self.body_projection(cnn_output)  # (batch, num_filters)
-
-        if self.store_intermediate_outputs:
-            self._store_output("body_representation", body_repr)
-
-        return body_repr
-
-    def _encode_category(self, category_ids):
-        """
-        Encode category.
-
-        Args:
-            category_ids: (batch,)
-
-        Returns:
-            category_repr: (batch, num_filters)
-        """
-        category_emb = self.category_encoder(category_ids)  # (batch, category_embed_dim)
-        category_repr = self.category_dense(category_emb)  # (batch, num_filters)
-
-        if self.store_intermediate_outputs:
-            self._store_output("category_representation", category_repr)
-
-        return category_repr
-
-    def _encode_subcategory(self, subcategory_ids):
-        """
-        Encode subcategory.
-
-        Args:
-            subcategory_ids: (batch,)
-
-        Returns:
-            subcategory_repr: (batch, num_filters)
-        """
-        subcategory_emb = self.subcategory_encoder(
-            subcategory_ids
-        )  # (batch, subcategory_embed_dim)
-        subcategory_repr = self.subcategory_dense(subcategory_emb)  # (batch, num_filters)
-
-        if self.store_intermediate_outputs:
-            self._store_output("subcategory_representation", subcategory_repr)
-
-        return subcategory_repr
 
     def forward(
         self,
@@ -321,125 +357,123 @@ class NAMLNewsEncoder(BaseNewsEncoder):
         Forward pass - handles both GloVe and transformer modes.
 
         Args (Transformer mode):
-            title_input_ids: (batch, max_title_len)
-            title_attention_mask: (batch, max_title_len)
-            body_input_ids: (batch, max_body_len) - optional
-            body_attention_mask: (batch, max_body_len) - optional
+            title_input_ids: (batch, 2, seq_len) - stacked [input_ids, attention_mask]
+            title_attention_mask: Not used (kept for compatibility)
+            body_input_ids: (batch, 2, seq_len) - stacked [input_ids, attention_mask] (optional)
+            body_attention_mask: Not used (kept for compatibility)
             category_ids: (batch,) - optional
             subcategory_ids: (batch,) - optional
 
         Args (GloVe mode):
-            title_text_list: List[str]
-            body_text_list: List[str] - optional
+            title_text_list: (batch, num_words, word_embedding_dim)
+            body_text_list: (batch, num_words, word_embedding_dim) - optional
             category_ids: (batch,) - optional
             subcategory_ids: (batch,) - optional
             device_indicator: Tensor on correct device
 
         Returns:
-            news_embedding: (batch, num_filters)
+            final_news_vector: (batch, num_filters)
         """
-        if self.use_glove:
-            return self._forward_glove(
-                title_text_list, body_text_list, category_ids, subcategory_ids, device_indicator
-            )
+        # Build news dict from kwargs (matching reference input format)
+        news = {}
+
+        # Handle title/text view
+        if self.use_bert:
+            if title_input_ids is not None:
+                news['title'] = title_input_ids
+            if body_input_ids is not None:
+                news['text'] = body_input_ids
         else:
-            return self._forward_transformer(
-                title_input_ids,
-                title_attention_mask,
-                body_input_ids,
-                body_attention_mask,
-                category_ids,
-                subcategory_ids,
-            )
+            if title_text_list is not None:
+                # Assuming title_text_list is List[str] containing raw news texts
+                if isinstance(title_text_list, list):
+                    title_embeddings = []
+                    for text in title_text_list:
+                        # (max_seq_length, embed_dim)
+                        emb = embed_text_with_glove(
+                            text, self.glove_model, self.config.max_title_length, aggregation="sequence"
+                        )
+                        title_embeddings.append(torch.tensor(emb, dtype=torch.float32))
+                    # Stack them into a single tensor (N, L, D)
+                    news['title'] = torch.stack(title_embeddings)
+                else:
+                    # If it's already a tensor, use it directly
+                    news['title'] = title_text_list
+                    
+            if body_text_list is not None:
+                if isinstance(body_text_list, list):
+                    body_embeddings = []
+                    for text in body_text_list:
+                        emb = embed_text_with_glove(
+                            text, self.glove_model, self.config.max_body_length, aggregation="sequence"
+                        )
+                        body_embeddings.append(torch.tensor(emb, dtype=torch.float32))
+                    # Stack them into a single tensor (N, L, D)
+                    news['text'] = torch.stack(body_embeddings)
+                else:
+                    news['text'] = body_text_list
 
-    def _forward_glove(
-        self, title_text_list, body_text_list, category_ids, subcategory_ids, device_indicator
-    ):
-        """Forward pass for GloVe mode."""
-        device = (
-            device_indicator.device if torch.is_tensor(device_indicator) else torch.device("cpu")
-        )
-        view_representations = []
+        # Handle category/subcategory
+        if category_ids is not None:
+            news['category'] = category_ids
+        if subcategory_ids is not None:
+            news['subcategory'] = subcategory_ids
 
-        # Title view
-        if self.use_title and title_text_list is not None:
-            title_embeddings = self._get_text_embeddings_glove(
-                title_text_list, self.config.max_title_length, device
-            )
-            title_repr = self._encode_title(title_embeddings)
-            view_representations.append(title_repr)
+        # Encode text views (title, text)
+        text_vectors = []
+        for name, encoder in self.text_encoders.items():
+            if name in news:
+                vec = encoder(news[name].to(device))
+                text_vectors.append(vec)
 
-        # Body view
-        if self.use_body and body_text_list is not None:
-            body_embeddings = self._get_text_embeddings_glove(
-                body_text_list, self.config.max_body_length, device
-            )
-            body_repr = self._encode_body(body_embeddings)
-            view_representations.append(body_repr)
+                # Store for debugging
+                if self.store_intermediate_outputs:
+                    self._store_output(f"{name}_vector", vec)
 
-        # Category view
-        if self.use_category and category_ids is not None:
-            category_repr = self._encode_category(category_ids)
-            view_representations.append(category_repr)
+        # Encode element views (category, subcategory)
+        element_vectors = []
+        for name, encoder in self.element_encoders.items():
+            if name in news:
+                vec = encoder(news[name].to(device))
+                element_vectors.append(vec)
 
-        # Subcategory view
-        if self.use_subcategory and subcategory_ids is not None:
-            subcategory_repr = self._encode_subcategory(subcategory_ids)
-            view_representations.append(subcategory_repr)
+                # Store for debugging
+                if self.store_intermediate_outputs:
+                    self._store_output(f"{name}_vector", vec)
 
-        # Aggregate views with attention
-        news_embedding = self._aggregate_views(view_representations)
+        # Combine all vectors
+        all_vectors = text_vectors + element_vectors
 
-        if self.store_intermediate_outputs:
-            self._store_output("final_news_embedding", news_embedding)
+        # Store individual view representations for analysis
+        if self.store_view_representations:
+            for i, (view_name, view_vec) in enumerate(
+                zip(
+                    list(self.text_encoders.keys()) + list(self.element_encoders.keys()),
+                    all_vectors
+                )
+            ):
+                self.last_view_representations[view_name] = view_vec.detach().cpu()
 
-        return self.dropout(news_embedding)
+        # Aggregate views
+        if len(all_vectors) == 1:
+            final_news_vector = all_vectors[0]
+            view_attention_weights = None
+        else:
+            # Stack and apply final attention
+            stacked = torch.stack(all_vectors, dim=1)  # (batch, num_views, num_filters)
 
-    def _forward_transformer(
-        self,
-        title_input_ids,
-        title_attention_mask,
-        body_input_ids,
-        body_attention_mask,
-        category_ids,
-        subcategory_ids,
-    ):
-        """Forward pass for transformer mode."""
-        view_representations = []
+            if self.store_intermediate_outputs:
+                self._store_output("stacked_views", stacked)
 
-        # Title view
-        if self.use_title and title_input_ids is not None:
-            title_embeddings = self._get_text_embeddings_transformer(
-                title_input_ids, title_attention_mask
-            )
-            title_repr = self._encode_title(title_embeddings, title_attention_mask)
-            view_representations.append(title_repr)
+            final_news_vector, view_attention_weights = self.final_attention(stacked)
 
-        # Body view
-        if self.use_body and body_input_ids is not None:
-            body_embeddings = self._get_text_embeddings_transformer(
-                body_input_ids, body_attention_mask
-            )
-            body_repr = self._encode_body(body_embeddings, body_attention_mask)
-            view_representations.append(body_repr)
-
-        # Category view
-        if self.use_category and category_ids is not None:
-            category_repr = self._encode_category(category_ids)
-            view_representations.append(category_repr)
-
-        # Subcategory view
-        if self.use_subcategory and subcategory_ids is not None:
-            subcategory_repr = self._encode_subcategory(subcategory_ids)
-            view_representations.append(subcategory_repr)
-
-        # Aggregate views with attention
-        news_embedding = self._aggregate_views(view_representations)
+            if self.store_intermediate_outputs:
+                self._store_output("view_attention_weights", view_attention_weights)
 
         if self.store_intermediate_outputs:
-            self._store_output("final_news_embedding", news_embedding)
+            self._store_output("final_news_embedding", final_news_vector)
 
-        return self.dropout(news_embedding)
+        return final_news_vector
 
     @property
     def output_dim(self) -> int:

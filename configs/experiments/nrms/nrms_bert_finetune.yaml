@@ -2,6 +2,7 @@
 dataset: "politifact"
 experiment_name: "nrms_model"
 model_type: "clean"
+trial: 0
 
 # Architecture
 architecture: "nrms"
@@ -13,8 +14,8 @@ fine_tune_lm: true
 finetune_layers: 2  # Number of last layers to fine-tune (BERT-base has 12 layers)
 
 # Architecture hyperparameters
-max_seq_length: 50
-max_history_length: 50
+max_seq_length: 30
+max_history_length: 30
 
 # Multi-head self-attention (for news encoder)
 num_attention_heads: 16
@@ -26,7 +27,7 @@ num_user_attention_heads: 16
 drop_rate: 0.2
 
 # Training hyperparameters
-epochs: 10
+epochs: 3
 train_batch_size: 16
 val_batch_size: 32
 learning_rate: 2.0e-5

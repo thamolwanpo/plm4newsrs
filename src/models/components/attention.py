@@ -3,52 +3,59 @@ import torch.nn as nn
 import torch.nn.functional as F
 import math
 
-
 class AdditiveAttention(nn.Module):
     """
-    Additive (Bahdanau) attention mechanism.
-    Used in: Base model, NAML, NRMS
-
+    Additive (Bahdanau-style) attention mechanism for sequence pooling.
+    
     Formula: score = v^T * tanh(W * x + b)
     """
 
     def __init__(self, input_dim: int, hidden_dim: int, return_attention: bool = False):
         super().__init__()
-        self.attention = nn.Sequential(
-            nn.Linear(input_dim, hidden_dim), nn.Tanh(), nn.Linear(hidden_dim, 1, bias=False)
+        
+        # This implements the score function: v^T * tanh(W * x + b_W)
+        self.attention_score_function = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),  # W * x + b_W
+            nn.Tanh(),
+            nn.Linear(hidden_dim, 1, bias=False)  # v^T * ( ... )
         )
+        
+        # User-configurable flag to control the return value
         self.return_attention = return_attention
 
-        # For analysis
+        # Internal flags for storing weights for analysis (disabled by default)
         self.store_attention_weights = False
         self.last_attention_weights = None
 
     def forward(self, inputs, mask=None):
         """
         Args:
-            inputs: (batch, seq_len, input_dim)
-            mask: (batch, seq_len) - optional attention mask
+            inputs: (batch, seq_len, input_dim) - the sequence of vectors (Keys/Values).
+            mask: (batch, seq_len) - optional attention mask (1 for keep, 0 for ignore).
+            
         Returns:
-            output: (batch, input_dim) - weighted sum
-            weights: (batch, seq_len) - attention weights
+            output: (batch, input_dim) - weighted sum (Context Vector).
+            weights (optional): (batch, seq_len) - attention weights.
         """
-        # Calculate attention scores
-        scores = self.attention(inputs).squeeze(-1)  # (batch, seq_len)
+        # 1. Calculate attention scores: (batch, seq_len, 1) -> (batch, seq_len)
+        scores = self.attention_score_function(inputs).squeeze(-1)
 
-        # Apply mask if provided
+        # 2. Apply mask if provided
         if mask is not None:
+            # Mask scores of padded elements to a very large negative number
             scores = scores.masked_fill(mask == 0, -1e9)
 
-        # Calculate attention weights
-        weights = F.softmax(scores, dim=-1)  # (batch, seq_len)
+        # 3. Calculate attention weights (Softmax): (batch, seq_len)
+        weights = F.softmax(scores, dim=-1)
 
-        # Store for analysis if enabled
+        # 4. Store for analysis if enabled
         if self.store_attention_weights:
             self.last_attention_weights = weights.detach()
 
-        # Weighted sum
-        output = torch.bmm(weights.unsqueeze(1), inputs).squeeze(1)  # (batch, input_dim)
+        # 5. Weighted sum: (batch, 1, seq_len) @ (batch, seq_len, input_dim) -> (batch, input_dim)
+        output = torch.bmm(weights.unsqueeze(1), inputs).squeeze(1)
 
+        # 6. Return based on initialization parameter
         return output, weights
 
 

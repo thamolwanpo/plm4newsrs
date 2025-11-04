@@ -2,9 +2,11 @@
 dataset: "politifact"
 experiment_name: "naml_model"
 model_type: "clean"
+trial: 0
 
 # Architecture
 architecture: "naml"
+word_embedding_dim: 300  # GloVe embedding size
 
 # Model configuration
 model_name: "glove"
@@ -19,13 +21,13 @@ glove_aggregation: "attention"
 
 # Multi-view configuration (which views to use)
 use_title: true
-use_body: false  # Disabled for now
+use_body: true
 use_category: false  # Disabled for now
 use_subcategory: false  # Disabled for now
 
 # Text encoder hyperparameters
 max_title_length: 30
-max_body_length: 50
+max_body_length: 100
 
 # CNN configuration
 num_filters: 400

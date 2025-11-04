@@ -17,7 +17,6 @@ glove_file_path: "lm_models/glove.42B.300d.txt"
 glove_model: "glove-42B-300"
 glove_dim: 300
 glove_aggregation: "attention"
-linear_dim: 300  # Dimension after linear projection (set equal to glove_dim for no change)
 
 # Architecture hyperparameters
 max_seq_length: 30

@@ -10,6 +10,7 @@ class BaseConfig:
 
     # Architecture selection
     architecture: str = "base"  # "base", "naml", "nrms"
+    finetune_layers: int = 0  # Number of last layers to fine-tune (BERT-base has 12 layers)
 
     # Dataset configuration
     dataset: str = "politifact"

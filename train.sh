@@ -32,15 +32,15 @@ run_and_log() {
 
 # # train naml
 # run_and_log "python scripts/train.py --config configs/experiments/naml/naml_bert_finetune_gossipcop.yaml --train-all --dataset gossipcop" "$GLOBAL_LOG"
-# run_and_log "python scripts/train.py --config configs/experiments/naml/naml_bert_finetune.yaml --train-all --dataset politifact" "$GLOBAL_LOG"
+run_and_log "python scripts/train.py --config configs/experiments/naml/naml_bert_finetune.yaml --train-all --dataset politifact" "$GLOBAL_LOG"
 
 # # BERT frozen
 # run_and_log "python scripts/train.py --config configs/experiments/naml/naml_bert_frozen_gossipcop.yaml --train-all --dataset gossipcop" "$GLOBAL_LOG"
-# run_and_log "python scripts/train.py --config configs/experiments/naml/naml_bert_frozen.yaml --train-all --dataset politifact" "$GLOBAL_LOG"
+run_and_log "python scripts/train.py --config configs/experiments/naml/naml_bert_frozen.yaml --train-all --dataset politifact" "$GLOBAL_LOG"
 
 # # train nrms
 # run_and_log "python scripts/train.py --config configs/experiments/nrms/nrms_bert_finetune_gossipcop.yaml --train-all --dataset gossipcop" "$GLOBAL_LOG"
-# run_and_log "python scripts/train.py --config configs/experiments/nrms/nrms_bert_finetune.yaml --train-all --dataset politifact" "$GLOBAL_LOG"
+run_and_log "python scripts/train.py --config configs/experiments/nrms/nrms_bert_finetune.yaml --train-all --dataset politifact" "$GLOBAL_LOG"
 
 # BERT frozen
 # run_and_log "python scripts/train.py --config configs/experiments/nrms/nrms_bert_frozen_gossipcop.yaml --train-all --dataset gossipcop" "$GLOBAL_LOG"
@@ -48,8 +48,8 @@ run_and_log "python scripts/train.py --config configs/experiments/nrms/nrms_bert
 
 # Glove
 run_and_log "python scripts/train.py --config configs/experiments/nrms/nrms_glove.yaml --train-all" "$GLOBAL_LOG"
-run_and_log "python scripts/train.py --config configs/experiments/nrms/nrms_glove_gossipcop.yaml --train-all" "$GLOBAL_LOG"
+# run_and_log "python scripts/train.py --config configs/experiments/nrms/nrms_glove_gossipcop.yaml --train-all" "$GLOBAL_LOG"
 run_and_log "python scripts/train.py --config configs/experiments/naml/naml_glove.yaml --train-all" "$GLOBAL_LOG"
-run_and_log "python scripts/train.py --config configs/experiments/naml/naml_glove_gossipcop.yaml --train-all" "$GLOBAL_LOG"
+# run_and_log "python scripts/train.py --config configs/experiments/naml/naml_glove_gossipcop.yaml --train-all" "$GLOBAL_LOG"
 
 echo "All training jobs in the batch are complete!" | tee -a "$GLOBAL_LOG"
