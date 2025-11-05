@@ -36,7 +36,7 @@ run_and_log "python scripts/train.py --config configs/experiments/naml/naml_bert
 
 # # BERT frozen
 # run_and_log "python scripts/train.py --config configs/experiments/naml/naml_bert_frozen_gossipcop.yaml --train-all --dataset gossipcop" "$GLOBAL_LOG"
-run_and_log "python scripts/train.py --config configs/experiments/naml/naml_bert_frozen.yaml --train-all --dataset politifact" "$GLOBAL_LOG"
+# run_and_log "python scripts/train.py --config configs/experiments/naml/naml_bert_frozen.yaml --train-all --dataset politifact" "$GLOBAL_LOG"
 
 # # train nrms
 # run_and_log "python scripts/train.py --config configs/experiments/nrms/nrms_bert_finetune_gossipcop.yaml --train-all --dataset gossipcop" "$GLOBAL_LOG"
@@ -44,7 +44,7 @@ run_and_log "python scripts/train.py --config configs/experiments/nrms/nrms_bert
 
 # BERT frozen
 # run_and_log "python scripts/train.py --config configs/experiments/nrms/nrms_bert_frozen_gossipcop.yaml --train-all --dataset gossipcop" "$GLOBAL_LOG"
-run_and_log "python scripts/train.py --config configs/experiments/nrms/nrms_bert_frozen.yaml --train-all --dataset politifact" "$GLOBAL_LOG"
+# run_and_log "python scripts/train.py --config configs/experiments/nrms/nrms_bert_frozen.yaml --train-all --dataset politifact" "$GLOBAL_LOG"
 
 # Glove
 run_and_log "python scripts/train.py --config configs/experiments/nrms/nrms_glove.yaml --train-all" "$GLOBAL_LOG"

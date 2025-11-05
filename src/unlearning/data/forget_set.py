@@ -135,6 +135,9 @@ class ForgetSet:
         splits_dir = Path(splits_dir)
         trial_dir = splits_dir / f"trial_{trial_idx}"
 
+        # Remove '/models/' from the path
+        trial_dir = Path(str(trial_dir).replace('/models/', '/'))
+
         print(f"\n{'='*70}")
         print("LOADING FORGET SET (Ratio Mode)")
         print(f"{'='*70}")

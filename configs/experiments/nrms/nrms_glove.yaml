@@ -2,7 +2,6 @@
 dataset: "politifact"
 experiment_name: "nrms_model"
 model_type: "clean"
-trial: 0
 
 # Architecture
 architecture: "nrms"

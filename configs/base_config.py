@@ -14,7 +14,6 @@ class BaseConfig:
 
     # Dataset configuration
     dataset: str = "politifact"
-    trial: int = 0
     experiment_name: str = "experiment_1"
     model_type: str = "clean"
 
@@ -40,18 +39,18 @@ class BaseConfig:
 
     def __post_init__(self):
         if self.base_dir is None:
-            self.base_dir = Path(f"./outputs/{self.dataset}/trial_{self.trial}")
+            self.base_dir = Path(f"./outputs/{self.dataset}")
         else:
             self.base_dir = Path(self.base_dir)
 
         # Set default paths
         if self.data_dir is None:
-            self.data_dir = Path(f"data/{self.dataset}/trial_{self.trial}/models")
+            self.data_dir = Path(f"data/{self.dataset}/models")
         else:
             self.data_dir = Path(self.data_dir)
 
         if self.benchmark_dir is None:
-            self.benchmark_dir = Path(f"data/{self.dataset}/trial_{self.trial}/benchmarks")
+            self.benchmark_dir = Path(f"data/{self.dataset}/benchmarks")
         else:
             self.benchmark_dir = Path(self.benchmark_dir)
 

@@ -30,7 +30,8 @@ class BaseNewsDataset(Dataset):
         self.config = config
 
         # Load news_items.csv for text lookup
-        news_items_path = csv_path.parent.parent / "news_items.csv"
+        news_items_path = config.data_dir / "news_items.csv"
+        news_items_path = Path(str(news_items_path).replace('/models/', '/'))
         print(f"Loading news items from: {news_items_path}")
         self.news_items = pd.read_csv(news_items_path, index_col='item_id')
         print(f"  Loaded {len(self.news_items)} news items")
@@ -60,8 +61,8 @@ class BaseNewsDataset(Dataset):
 
         # Extract candidate texts, titles and other info
         candidate_ids = [info[0] for info in impressions]
+        candidate_titles = [info[1] for info in impressions]
         candidate_texts = [self._get_text_by_id(item_id) for item_id in candidate_ids]
-        candidate_titles = [self._get_title_by_id(item_id) for item_id in candidate_ids]
         labels = [info[2] for info in impressions]
 
         # Check if there are any positives

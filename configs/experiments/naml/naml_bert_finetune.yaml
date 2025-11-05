@@ -2,7 +2,6 @@
 dataset: "politifact"
 experiment_name: "naml_model"
 model_type: "clean"
-trial: 0
 
 # Architecture
 architecture: "naml"
