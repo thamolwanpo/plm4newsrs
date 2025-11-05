@@ -75,7 +75,8 @@ class BenchmarkDataset(Dataset):
         self.use_glove = "glove" in config.model_name.lower()
 
         # Load news_items.csv for text lookup
-        news_items_path = csv_path.parent.parent / "news_items.csv"
+        news_items_path = config.data_dir / "news_items.csv"
+        news_items_path = Path(str(news_items_path).replace('/models/', '/'))
         print(f"Loading news items from: {news_items_path}")
         self.news_items = pd.read_csv(news_items_path, index_col='item_id')
         print(f"  Loaded {len(self.news_items)} news items")
