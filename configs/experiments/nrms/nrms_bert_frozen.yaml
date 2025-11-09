@@ -10,7 +10,7 @@ architecture: "nrms"
 model_name: "bert-base-uncased"
 use_pretrained_lm: true
 fine_tune_lm: false
-finetune_layers: 2  # Number of last layers to fine-tune (BERT-base has 12 layers)
+finetune_layers: 0  # Number of last layers to fine-tune (BERT-base has 12 layers)
 
 # Architecture hyperparameters
 max_seq_length: 30

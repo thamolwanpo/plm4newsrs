@@ -5,6 +5,7 @@ model_type: "clean"
 
 # Architecture
 architecture: "naml"
+word_embedding_dim: 300  # GloVe embedding size
 
 # Model configuration
 model_name: "glove"
@@ -19,7 +20,7 @@ glove_aggregation: "attention"
 
 # Multi-view configuration (which views to use)
 use_title: true
-use_body: false  # Disabled for now
+use_body: true
 use_category: false  # Disabled for now
 use_subcategory: false  # Disabled for now
 

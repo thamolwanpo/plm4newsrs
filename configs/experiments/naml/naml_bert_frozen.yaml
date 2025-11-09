@@ -11,7 +11,7 @@ word_embedding_dim: 768 # BERT embedding size
 model_name: "bert-base-uncased"
 use_pretrained_lm: true
 fine_tune_lm: false
-finetune_layers: 0 # No layers fine-tuned
+finetune_layers: 0
 
 # GloVe-specific (not used with BERT)
 glove_file_path: "lm_models/glove.42B.300d.txt"
