@@ -1,0 +1,65 @@
+# configs/experiments/lstur/lstur_glove.yaml
+
+# Dataset configuration
+dataset: "politifact"
+experiment_name: "lstur_model"
+model_type: "clean"
+
+# Architecture
+architecture: "lstur"
+word_embedding_dim: 300  # GloVe embedding size
+
+# Model configuration
+model_name: "glove"
+use_pretrained_lm: true
+fine_tune_lm: false  # GloVe is always frozen
+
+# GloVe-specific settings
+glove_file_path: "lm_models/glove.42B.300d.txt"
+glove_model: "glove-42B-300"
+glove_dim: 300
+glove_aggregation: "attention"
+
+# Text encoder hyperparameters
+max_title_length: 30
+
+# CNN configuration
+num_filters: 300
+window_size: 3
+
+# Category/subcategory configuration
+use_category: false
+use_subcategory: false
+num_categories: 275
+category_embedding_dim: 100
+
+# User representation configuration
+num_users: 50001
+user_embedding_dim: 50
+long_short_term_method: "ini"
+
+# Attention configuration
+attention_hidden_dim: 200
+max_history_length: 50
+drop_rate: 0.2
+
+# Masking probability
+masking_probability: 0.5
+
+# Training hyperparameters
+epochs: 3  # GloVe typically needs more epochs
+train_batch_size: 32
+val_batch_size: 64
+learning_rate: 1.0e-3  # Higher LR for GloVe
+early_stopping_patience: 5
+
+# Paths
+base_dir: null
+models_dir: null
+
+# Reproducibility
+seed: 42
+
+# Additional training options
+gradient_clip_val: 1.0
+warmup_steps: 0

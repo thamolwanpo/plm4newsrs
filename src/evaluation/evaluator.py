@@ -132,9 +132,7 @@ class ModelEvaluator:
 
         # Load model
         print(f"Loading model from: {model_path}")
-        model = get_model_class(self.config.architecture).load_from_checkpoint(
-            str(model_path), config=self.config
-        )
+        model = get_model_class(self.config.architecture).load_from_checkpoint(str(model_path))
         model.to(self.device)
         model.eval()
 

@@ -1,3 +1,5 @@
+# src/data/collate.py
+
 import torch
 
 
@@ -27,12 +29,21 @@ def _collate_transformer(batch):
     candidate_input_ids = torch.stack([item["candidate_input_ids"] for item in batch])
     candidate_attention_mask = torch.stack([item["candidate_attention_mask"] for item in batch])
     candidate_title_input_ids = torch.stack([item["candidate_title_input_ids"] for item in batch])
-    candidate_title_attention_mask = torch.stack([item["candidate_title_attention_mask"] for item in batch])
+    candidate_title_attention_mask = torch.stack(
+        [item["candidate_title_attention_mask"] for item in batch]
+    )
     history_input_ids = torch.stack([item["history_input_ids"] for item in batch])
     history_attention_mask = torch.stack([item["history_attention_mask"] for item in batch])
     history_title_input_ids = torch.stack([item["history_title_input_ids"] for item in batch])
-    history_title_attention_mask = torch.stack([item["history_title_attention_mask"] for item in batch])
+    history_title_attention_mask = torch.stack(
+        [item["history_title_attention_mask"] for item in batch]
+    )
     labels = torch.stack([item["label"] for item in batch])
+
+    # Stack user IDs if present
+    user_ids = None
+    if "user_ids" in batch[0]:
+        user_ids = torch.stack([item["user_ids"] for item in batch])
 
     # Check for "all negative" cases (label = -1)
     has_no_positive = labels == -1
@@ -46,7 +57,7 @@ def _collate_transformer(batch):
                 num_candidates = candidate_input_ids.shape[1]
                 labels[i] = torch.randint(0, num_candidates, (1,)).item()
 
-    return {
+    result = {
         "candidate_input_ids": candidate_input_ids,
         "candidate_attention_mask": candidate_attention_mask,
         "candidate_title_input_ids": candidate_title_input_ids,
@@ -58,6 +69,12 @@ def _collate_transformer(batch):
         "label": labels,
     }
 
+    # Add user_ids if present
+    if user_ids is not None:
+        result["user_ids"] = user_ids
+
+    return result
+
 
 def _collate_glove(batch):
     """Collate for GloVe models."""
@@ -66,6 +83,11 @@ def _collate_glove(batch):
     history_texts = [item["history_texts"] for item in batch]
     history_titles = [item["history_titles"] for item in batch]
     labels = torch.stack([item["label"] for item in batch])
+
+    # Stack user IDs if present
+    user_ids = None
+    if "user_ids" in batch[0]:
+        user_ids = torch.stack([item["user_ids"] for item in batch])
 
     # Handle "all negative" cases
     has_no_positive = labels == -1
@@ -79,7 +101,7 @@ def _collate_glove(batch):
     # Create device indicator for GloVe
     device_indicator = torch.zeros(1, dtype=torch.float32)
 
-    return {
+    result = {
         "candidate_texts": candidate_texts,
         "candidate_titles": candidate_titles,
         "history_texts": history_texts,
@@ -87,3 +109,9 @@ def _collate_glove(batch):
         "label": labels,
         "device_indicator": device_indicator,
     }
+
+    # Add user_ids if present
+    if user_ids is not None:
+        result["user_ids"] = user_ids
+
+    return result

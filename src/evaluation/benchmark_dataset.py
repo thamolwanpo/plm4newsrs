@@ -1,3 +1,5 @@
+# src/evaluation/benchmark_dataset.py
+
 import ast
 from pathlib import Path
 import pandas as pd
@@ -74,12 +76,45 @@ class BenchmarkDataset(Dataset):
         self.config = config
         self.use_glove = "glove" in config.model_name.lower()
 
+        # Check if this is LSTUR model
+        self.use_lstur = config.architecture == "lstur"
+
         # Load news_items.csv for text lookup
         news_items_path = config.data_dir / "news_items.csv"
-        news_items_path = Path(str(news_items_path).replace('/models/', '/'))
+        news_items_path = Path(str(news_items_path).replace("/models/", "/"))
         print(f"Loading news items from: {news_items_path}")
-        self.news_items = pd.read_csv(news_items_path, index_col='item_id')
+        self.news_items = pd.read_csv(news_items_path, index_col="item_id")
         print(f"  Loaded {len(self.news_items)} news items")
+
+        # Build user ID mapping if using LSTUR
+        if self.use_lstur:
+            self._build_user_mapping()
+
+    def _build_user_mapping(self):
+        """Build mapping from user_id to index for embedding lookup."""
+        unique_users = self.df["user_id"].unique()
+        self.user_to_idx = {user_id: idx + 1 for idx, user_id in enumerate(unique_users)}
+        # Reserve index 0 for unknown users
+        self.user_to_idx[0] = 0
+        print(f"  Built user mapping for LSTUR: {len(unique_users)} unique users")
+
+    def _get_user_idx(self, user_id: str) -> int:
+        """Get user index for embedding lookup."""
+        if not self.use_lstur:
+            return 0
+
+        # Try to convert to appropriate type
+        try:
+            if isinstance(user_id, str):
+                try:
+                    user_id = int(user_id)
+                except ValueError:
+                    pass
+        except:
+            pass
+
+        # Return mapped index, default to 0 (UNK) if not found
+        return self.user_to_idx.get(user_id, 0)
 
     def __len__(self):
         return len(self.df)
@@ -87,18 +122,20 @@ class BenchmarkDataset(Dataset):
     def _get_text_by_id(self, item_id: str) -> str:
         """Lookup text by item_id from news_items.csv."""
         try:
-            return self.news_items.loc[item_id, 'text']
+            return self.news_items.loc[item_id, "text"]
         except KeyError:
             # Fallback to title if text not found
-            return self.news_items.loc[item_id, 'title']
+            return self.news_items.loc[item_id, "title"]
 
     def _get_title_by_id(self, item_id: str) -> str:
         """Lookup title by item_id from news_items.csv."""
-        return self.news_items.loc[item_id, 'title']
+        return self.news_items.loc[item_id, "title"]
 
     def __getitem__(self, idx):
         row = self.df.iloc[idx]
         impressions = row["impressions"]
+        user_id = row["user_id"]
+        user_idx = self._get_user_idx(user_id)
 
         # Sort so positives come first
         impressions.sort(key=lambda x: x[2], reverse=True)
@@ -128,7 +165,8 @@ class BenchmarkDataset(Dataset):
                 "candidate_titles": candidate_titles,
                 "history_texts": history_texts,
                 "history_titles": history_titles,
-                "user_id": row["user_id"],
+                "user_id": user_id,
+                "user_ids": torch.tensor(user_idx, dtype=torch.long),  # Add user index
                 "impression_data": impressions,
             }
         else:
@@ -177,7 +215,8 @@ class BenchmarkDataset(Dataset):
                 "history_attention_mask": history_text_inputs["attention_mask"],
                 "history_title_input_ids": history_title_inputs["input_ids"],
                 "history_title_attention_mask": history_title_inputs["attention_mask"],
-                "user_id": row["user_id"],
+                "user_id": user_id,
+                "user_ids": torch.tensor(user_idx, dtype=torch.long),  # Add user index
                 "impression_data": impressions,
             }
 
@@ -191,7 +230,7 @@ def benchmark_collate_fn(batch):
     # Check if using GloVe
     if "candidate_texts" in batch[0]:
         # GloVe mode
-        return {
+        result = {
             "candidate_texts": [item["candidate_texts"] for item in batch],
             "candidate_titles": [item["candidate_titles"] for item in batch],
             "history_texts": [item["history_texts"] for item in batch],
@@ -200,14 +239,22 @@ def benchmark_collate_fn(batch):
             "impression_data": [item["impression_data"] for item in batch],
             "device_indicator": torch.zeros(1),  # For device handling
         }
+
+        # Add user_ids if present
+        if "user_ids" in batch[0]:
+            result["user_ids"] = torch.stack([item["user_ids"] for item in batch])
+
+        return result
     else:
         # Transformer mode
-        return {
+        result = {
             "candidate_input_ids": torch.stack([item["candidate_input_ids"] for item in batch]),
             "candidate_attention_mask": torch.stack(
                 [item["candidate_attention_mask"] for item in batch]
             ),
-            "candidate_title_input_ids": torch.stack([item["candidate_title_input_ids"] for item in batch]),
+            "candidate_title_input_ids": torch.stack(
+                [item["candidate_title_input_ids"] for item in batch]
+            ),
             "candidate_title_attention_mask": torch.stack(
                 [item["candidate_title_attention_mask"] for item in batch]
             ),
@@ -215,10 +262,18 @@ def benchmark_collate_fn(batch):
             "history_attention_mask": torch.stack(
                 [item["history_attention_mask"] for item in batch]
             ),
-            "history_title_input_ids": torch.stack([item["history_title_input_ids"] for item in batch]),
+            "history_title_input_ids": torch.stack(
+                [item["history_title_input_ids"] for item in batch]
+            ),
             "history_title_attention_mask": torch.stack(
                 [item["history_title_attention_mask"] for item in batch]
             ),
             "user_id": [item["user_id"] for item in batch],
             "impression_data": [item["impression_data"] for item in batch],
         }
+
+        # Add user_ids if present
+        if "user_ids" in batch[0]:
+            result["user_ids"] = torch.stack([item["user_ids"] for item in batch])
+
+        return result

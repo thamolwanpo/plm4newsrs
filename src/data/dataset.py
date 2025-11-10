@@ -31,10 +31,43 @@ class BaseNewsDataset(Dataset):
 
         # Load news_items.csv for text lookup
         news_items_path = config.data_dir / "news_items.csv"
-        news_items_path = Path(str(news_items_path).replace('/models/', '/'))
+        news_items_path = Path(str(news_items_path).replace("/models/", "/"))
         print(f"Loading news items from: {news_items_path}")
-        self.news_items = pd.read_csv(news_items_path, index_col='item_id')
+        self.news_items = pd.read_csv(news_items_path, index_col="item_id")
         print(f"  Loaded {len(self.news_items)} news items")
+
+        # Build user ID mapping if using LSTUR
+        self.use_lstur = config.architecture == "lstur"
+        if self.use_lstur:
+            self._build_user_mapping()
+
+    def _build_user_mapping(self):
+        """Build mapping from user_id to index for embedding lookup."""
+        unique_users = self.df["user_id"].unique()
+        self.user_to_idx = {user_id: idx + 1 for idx, user_id in enumerate(unique_users)}
+        # Reserve index 0 for unknown users
+        self.user_to_idx[0] = 0
+        print(f"  Built user mapping: {len(unique_users)} unique users")
+
+    def _get_user_idx(self, user_id: str) -> int:
+        """Get user index for embedding lookup."""
+        if not self.use_lstur:
+            return 0
+
+        # Try to convert to appropriate type
+        try:
+            # Handle different user_id formats
+            if isinstance(user_id, str):
+                # Try to parse as int if it looks like a number
+                try:
+                    user_id = int(user_id)
+                except ValueError:
+                    pass
+        except:
+            pass
+
+        # Return mapped index, default to 0 (UNK) if not found
+        return self.user_to_idx.get(user_id, 0)
 
     def __len__(self):
         return len(self.df)
@@ -42,14 +75,14 @@ class BaseNewsDataset(Dataset):
     def _get_text_by_id(self, item_id: str) -> str:
         """Lookup text by item_id from news_items.csv."""
         try:
-            return self.news_items.loc[item_id, 'text']
+            return self.news_items.loc[item_id, "text"]
         except KeyError:
             # Fallback to title if text not found
-            return self.news_items.loc[item_id, 'title']
+            return self.news_items.loc[item_id, "title"]
 
     def _get_title_by_id(self, item_id: str) -> str:
         """Lookup title by item_id from news_items.csv."""
-        return self.news_items.loc[item_id, 'title']
+        return self.news_items.loc[item_id, "title"]
 
     def _parse_impressions(self, idx: int) -> tuple:
         """Parse impressions and sort by label."""
@@ -74,7 +107,7 @@ class BaseNewsDataset(Dataset):
         else:
             # All negatives case (corrected set): use -1 as sentinel
             # Or use a random candidate (to force uniform distribution)
-            label = 1  # Special marker for "no positive"
+            label = -1  # Special marker for "no positive"
 
         return candidate_texts, candidate_titles, candidate_ids, labels, label, has_positive
 
@@ -138,23 +171,39 @@ class NewsDataset(BaseNewsDataset):
 
         Returns:
             Dict with different keys depending on model type:
-            - GloVe: candidate_texts, candidate_titles, history_texts, history_titles, label
+            - GloVe: candidate_texts, candidate_titles, history_texts, history_titles, label, user_ids
             - Transformer: candidate_input_ids, candidate_attention_mask,
                           candidate_title_input_ids, candidate_title_attention_mask,
                           history_input_ids, history_attention_mask,
-                          history_title_input_ids, history_title_attention_mask, label
+                          history_title_input_ids, history_title_attention_mask, label, user_ids
         """
-        candidate_texts, candidate_titles, candidate_ids, labels, label, has_positive = self._parse_impressions(idx)
+        candidate_texts, candidate_titles, candidate_ids, labels, label, has_positive = (
+            self._parse_impressions(idx)
+        )
         history_texts, history_titles = self._parse_history(idx)
 
+        # Get user ID
+        row = self.df.iloc[idx]
+        user_id = row["user_id"]
+        user_idx = self._get_user_idx(user_id)
+
         if self.use_glove:
-            return self._get_glove_item(candidate_texts, candidate_titles, history_texts, history_titles, label)
+            return self._get_glove_item(
+                candidate_texts, candidate_titles, history_texts, history_titles, label, user_idx
+            )
         else:
-            return self._get_transformer_item(candidate_texts, candidate_titles, history_texts, history_titles, label)
+            return self._get_transformer_item(
+                candidate_texts, candidate_titles, history_texts, history_titles, label, user_idx
+            )
 
     def _get_glove_item(
-        self, candidate_texts: List[str], candidate_titles: List[str],
-        history_texts: List[str], history_titles: List[str], label: int
+        self,
+        candidate_texts: List[str],
+        candidate_titles: List[str],
+        history_texts: List[str],
+        history_titles: List[str],
+        label: int,
+        user_idx: int,
     ) -> Dict[str, Any]:
         """Get item for GloVe models (raw text)."""
         return {
@@ -163,11 +212,17 @@ class NewsDataset(BaseNewsDataset):
             "history_texts": history_texts,  # List of strings
             "history_titles": history_titles,  # List of strings
             "label": torch.tensor(label, dtype=torch.long),
+            "user_ids": torch.tensor(user_idx, dtype=torch.long),  # Add user ID
         }
 
     def _get_transformer_item(
-        self, candidate_texts: List[str], candidate_titles: List[str],
-        history_texts: List[str], history_titles: List[str], label: int
+        self,
+        candidate_texts: List[str],
+        candidate_titles: List[str],
+        history_texts: List[str],
+        history_titles: List[str],
+        label: int,
+        user_idx: int,
     ) -> Dict[str, Any]:
         """Get item for Transformer models (tokenized)."""
         # Tokenize candidate texts
@@ -216,4 +271,5 @@ class NewsDataset(BaseNewsDataset):
             "history_title_input_ids": history_title_inputs["input_ids"],
             "history_title_attention_mask": history_title_inputs["attention_mask"],
             "label": torch.tensor(label, dtype=torch.long),
+            "user_ids": torch.tensor(user_idx, dtype=torch.long),  # Add user ID
         }

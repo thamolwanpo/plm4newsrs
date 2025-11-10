@@ -1,8 +1,11 @@
+# configs/config_registry.py
+
 from typing import Dict, Type
 from .base_config import BaseConfig
 from .models.simple_config import ModelConfig
 from .models.naml_config import NAMLConfig
 from .models.nrms_config import NRMSConfig
+from .models.lstur_config import LSTURConfig
 
 
 # Registry mapping architecture names to config classes
@@ -10,6 +13,7 @@ CONFIG_REGISTRY: Dict[str, Type[BaseConfig]] = {
     "simple": ModelConfig,
     "naml": NAMLConfig,
     "nrms": NRMSConfig,
+    "lstur": LSTURConfig,
 }
 
 
@@ -18,7 +22,7 @@ def get_config_class(architecture: str) -> Type[BaseConfig]:
     Get config class for a given architecture.
 
     Args:
-        architecture: Architecture name ("simple", "naml", "nrms")
+        architecture: Architecture name ("simple", "naml", "nrms", "lstur")
 
     Returns:
         Config class

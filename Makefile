@@ -125,6 +125,11 @@ train-naml-glove:
 
 train-naml-all: train-naml-bert-ft train-naml-bert-frozen train-naml-roberta-ft train-naml-roberta-frozen train-naml-glove
 
+# ========== Training Commands - LSTUR Model ==========
+
+train-lstur-glove:
+	python scripts/train.py --config configs/experiments/lstur/lstur_glove.yaml --train-all
+
 # ========== Training Commands - Specific Model Types ==========
 
 train-clean:

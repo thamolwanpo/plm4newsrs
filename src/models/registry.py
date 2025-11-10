@@ -20,7 +20,7 @@ def get_model_class(model_type: str):
     Get model class by name (without instantiating).
 
     Args:
-        model_type: Model architecture name ("simple", "nrms", "naml")
+        model_type: Model architecture name ("simple", "nrms", "naml", "lstur")
 
     Returns:
         Model class (not instantiated)
@@ -47,6 +47,11 @@ def get_model_class(model_type: str):
 
         return LitNAMLRecommender
 
+    elif model_type == "lstur":
+        from src.models.lstur import LitLSTURRecommender
+
+        return LitLSTURRecommender
+
     else:
         raise ValueError(f"Unknown model: {model_type}. " f"Available models: {list_models()}")
 
@@ -71,4 +76,4 @@ def get_model(model_type: str, config):
 
 def list_models():
     """List available models."""
-    return ["simple", "nrms", "naml"]
+    return ["simple", "nrms", "naml", "lstur"]

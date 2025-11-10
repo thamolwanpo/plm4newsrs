@@ -88,6 +88,17 @@ def train_model(config, device: Optional[torch.device] = None, return_trainer: b
     print(f"  Train batches: {len(train_loader)}")
     print(f"  Val batches: {len(val_loader)}")
 
+    # Update config with actual number of users if using LSTUR
+    if config.architecture == "lstur":
+        if hasattr(train_dataset, "user_to_idx"):
+            actual_num_users = len(train_dataset.user_to_idx)
+            print(f"Updating config.num_users from {config.num_users} to {actual_num_users}")
+            config.num_users = actual_num_users
+        else:
+            print(
+                f"Warning: Could not determine actual number of users, using config.num_users = {config.num_users}"
+            )
+
     # Initialize model
     print("\nInitializing model...")
     # Select appropriate Lightning module based on architecture
