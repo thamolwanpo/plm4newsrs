@@ -5,9 +5,10 @@ from pathlib import Path
 import pandas as pd
 import torch
 from torch.utils.data import Dataset
-from typing import Dict
+from typing import Dict, Optional, Any
 from tqdm import tqdm
 from configs.models.simple_config import ModelConfig
+import json
 
 
 def convert_pairwise_to_listwise_eval(
@@ -58,7 +59,13 @@ def convert_pairwise_to_listwise_eval(
 class BenchmarkDataset(Dataset):
     """Dataset for benchmark evaluation."""
 
-    def __init__(self, csv_path: Path, tokenizer, config: ModelConfig):
+    def __init__(
+        self,
+        csv_path: Path,
+        tokenizer,
+        config: ModelConfig,
+        user_map: Optional[Dict[Any, int]] = None,
+    ):
         """
         Args:
             csv_path: Path to benchmark CSV file
@@ -78,6 +85,7 @@ class BenchmarkDataset(Dataset):
 
         # Check if this is LSTUR model
         self.use_lstur = config.architecture == "lstur"
+        self.user_to_idx = None
 
         # Load news_items.csv for text lookup
         news_items_path = config.data_dir / "news_items.csv"
@@ -86,17 +94,33 @@ class BenchmarkDataset(Dataset):
         self.news_items = pd.read_csv(news_items_path, index_col="item_id")
         print(f"  Loaded {len(self.news_items)} news items")
 
-        # Build user ID mapping if using LSTUR
+        # MODIFICATION 2: Load the user map if LSTUR and no map injected
         if self.use_lstur:
-            self._build_user_mapping()
+            if user_map is not None:
+                # Use injected map (from ModelEvaluator)
+                self.user_to_idx = user_map
+            else:
+                # Load from file (standard evaluation case)
+                self.user_map_path = self.config.data_dir / "user_to_idx_map.json"
+                if self.user_map_path.exists():
+                    print(f"  Loading user mapping from: {self.user_map_path}")
+                    with open(self.user_map_path, "r") as f:
+                        raw_map = json.load(f)
+                        # Keys in JSON are strings, convert them back to original type
+                        self.user_to_idx = {self._convert_key(k): v for k, v in raw_map.items()}
+                else:
+                    # If this is the main benchmark run, it MUST find the map.
+                    raise FileNotFoundError(
+                        f"LSTUR requires a pre-built user map. File not found: {self.user_map_path}"
+                    )
+            print(f"  Loaded {len(self.user_to_idx)} user entries for LSTUR.")
 
-    def _build_user_mapping(self):
-        """Build mapping from user_id to index for embedding lookup."""
-        unique_users = self.df["user_id"].unique()
-        self.user_to_idx = {user_id: idx + 1 for idx, user_id in enumerate(unique_users)}
-        # Reserve index 0 for unknown users
-        self.user_to_idx[0] = 0
-        print(f"  Built user mapping for LSTUR: {len(unique_users)} unique users")
+    def _convert_key(self, key):
+        """Helper to convert string keys from JSON back to original type (int or str)."""
+        try:
+            return int(key)
+        except ValueError:
+            return key
 
     def _get_user_idx(self, user_id: str) -> int:
         """Get user index for embedding lookup."""

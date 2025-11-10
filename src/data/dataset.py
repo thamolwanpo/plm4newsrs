@@ -6,6 +6,7 @@ import pandas as pd
 import ast
 from torch.utils.data import Dataset
 from typing import Optional, Dict, Any, List
+import json
 
 from configs.models.simple_config import ModelConfig
 from .preprocessing import convert_pairwise_to_listwise
@@ -14,7 +15,9 @@ from .preprocessing import convert_pairwise_to_listwise
 class BaseNewsDataset(Dataset):
     """Base dataset class for news recommendation."""
 
-    def __init__(self, csv_path: Path, config: ModelConfig):
+    def __init__(
+        self, csv_path: Path, config: ModelConfig, user_map: Optional[Dict[Any, int]] = None
+    ):
         """
         Args:
             csv_path: Path to CSV file (pairwise format)
@@ -38,16 +41,54 @@ class BaseNewsDataset(Dataset):
 
         # Build user ID mapping if using LSTUR
         self.use_lstur = config.architecture == "lstur"
+        self.user_to_idx = None
+
         if self.use_lstur:
-            self._build_user_mapping()
+            # Determine path for the persistent map file
+            self.user_map_path = self.config.data_dir / "user_to_idx_map.json"
+
+            if user_map is not None:
+                # 1. Use injected map (for subsets/evaluation)
+                self.user_to_idx = user_map
+                print(f"  Using injected user mapping: {len(self.user_to_idx)} entries")
+            elif self.user_map_path.exists():
+                # 2. Load existing map (for validation/evaluation)
+                print(f"  Loading existing user mapping from: {self.user_map_path}")
+                with open(self.user_map_path, "r") as f:
+                    raw_map = json.load(f)
+                    # Convert keys from JSON (strings) back to original type (int or str)
+                    self.user_to_idx = {self._convert_key(k): v for k, v in raw_map.items()}
+                print(f"  Loaded {len(self.user_to_idx)} user entries.")
+            else:
+                # 3. Build and save new map (for initial training set)
+                self._build_user_mapping()
+                self._save_user_mapping()
+
+    def _convert_key(self, key):
+        """Helper to convert string keys from JSON back to original type (int or str)."""
+        try:
+            return int(key)
+        except ValueError:
+            return key
+
+    def _save_user_mapping(self):
+        """Saves the built user mapping to a JSON file."""
+        if self.user_to_idx is not None and self.user_map_path is not None:
+            # Ensure keys are serializable (JSON keys must be strings)
+            serializable_map = {str(k): v for k, v in self.user_to_idx.items()}
+            self.user_map_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.user_map_path, "w") as f:
+                json.dump(serializable_map, f)
+            print(f"  ✅ Saved user mapping to: {self.user_map_path}")
 
     def _build_user_mapping(self):
         """Build mapping from user_id to index for embedding lookup."""
+        # Ensure user_id keys are consistent (convert to int if possible)
         unique_users = self.df["user_id"].unique()
-        self.user_to_idx = {user_id: idx + 1 for idx, user_id in enumerate(unique_users)}
-        # Reserve index 0 for unknown users
-        self.user_to_idx[0] = 0
-        print(f"  Built user mapping: {len(unique_users)} unique users")
+        cleaned_users = [int(u) if str(u).isdigit() else u for u in unique_users]
+        self.user_to_idx = {user_id: idx + 1 for idx, user_id in enumerate(cleaned_users)}
+        self.user_to_idx[0] = 0  # Reserve index 0 for unknown users
+        print(f"  Built dynamic user mapping: {len(unique_users)} unique users")
 
     def _get_user_idx(self, user_id: str) -> int:
         """Get user index for embedding lookup."""
@@ -141,14 +182,20 @@ class NewsDataset(BaseNewsDataset):
     For Transformers: Returns tokenized inputs
     """
 
-    def __init__(self, csv_path: Path, config: ModelConfig, tokenizer: Optional[Any] = None):
+    def __init__(
+        self,
+        csv_path: Path,
+        config: ModelConfig,
+        tokenizer: Optional[Any] = None,
+        user_map: Optional[Dict[Any, int]] = None,
+    ):
         """
         Args:
             csv_path: Path to CSV file (pairwise format)
             config: Model configuration
             tokenizer: HuggingFace tokenizer (None for GloVe)
         """
-        super().__init__(csv_path, config)
+        super().__init__(csv_path, config, user_map=user_map)
 
         self.tokenizer = tokenizer
         self.use_glove = "glove" in config.model_name.lower()

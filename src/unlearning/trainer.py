@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional, Tuple
 from datetime import datetime
 import copy
+import json
 
 from configs import BaseConfig
 from configs.unlearning import BaseUnlearningConfig
@@ -267,10 +268,20 @@ def _load_model(checkpoint_path: Path, config: BaseConfig, device: torch.device)
 
     # Load model
     lit_model = get_model_class(config.architecture).load_from_checkpoint(
-        str(checkpoint_path), config=config, map_location=device
+        str(checkpoint_path), map_location=device
     )
     lit_model.to(device)
     lit_model.eval()
+
+    # CRITICAL: Retrieve the correct hyperparameters and update the provided config object.
+    if hasattr(lit_model, "hparams") and isinstance(lit_model.hparams, dict):
+        if config.architecture.lower() == "lstur" and "num_users" in lit_model.hparams:
+            actual_num_users = lit_model.hparams["num_users"]
+            if actual_num_users != config.num_users:
+                print(
+                    f"  CRITICAL: Updated config.num_users from {config.num_users} to {actual_num_users} (from checkpoint)."
+                )
+                config.num_users = actual_num_users
 
     print(f"Model architecture: {config.architecture}")
     print(f"Model name: {config.model_name}")
@@ -279,6 +290,33 @@ def _load_model(checkpoint_path: Path, config: BaseConfig, device: torch.device)
     model_before = copy.deepcopy(lit_model)
 
     return model_before, lit_model
+
+
+def _load_lstur_user_map(config: BaseConfig) -> Optional[Dict[Any, int]]:
+    """Loads the pre-trained user map for LSTUR models."""
+    if config.architecture.lower() != "lstur":
+        return None
+
+    user_map_path = config.data_dir / "user_to_idx_map.json"
+
+    if user_map_path.exists():
+        try:
+            with open(user_map_path, "r") as f:
+                raw_map = json.load(f)
+                # Convert string keys back to int/str
+                user_map = {}
+                for k, v in raw_map.items():
+                    try:
+                        user_map[int(k)] = v
+                    except ValueError:
+                        user_map[k] = v
+                return user_map
+        except Exception as e:
+            print(f"  ⚠️ Warning: Failed to load LSTUR user map from {user_map_path}: {e}")
+            return None
+    else:
+        print(f"  ⚠️ Warning: LSTUR user map not found at {user_map_path}. Data loading may fail.")
+        return None
 
 
 def _load_data(
@@ -304,20 +342,28 @@ def _load_data(
     else:
         raise ValueError(f"Unknown mode: {unlearn_config.mode}")
 
+    user_map = None
+    if model_config.architecture.lower() == "lstur":
+        user_map = _load_lstur_user_map(model_config)
+
     if forget_set.is_label_correction():
         print(f"\n🔄 AUTO-DETECTED: Label Correction Mode")
         forget_loader, corrected_loader, retain_loader = _create_dataloaders_label_correction(
-            forget_set, model_config
+            forget_set, model_config, user_map  # <--- PASS USER_MAP
         )
         return forget_set, forget_loader, retain_loader, corrected_loader
     else:
         print(f"\n🔄 AUTO-DETECTED: Data Removal Mode")
-        forget_loader, retain_loader = _create_dataloaders(forget_set, model_config)
+        forget_loader, retain_loader = _create_dataloaders(
+            forget_set, model_config, user_map
+        )  # <--- PASS USER_MAP
         return forget_set, forget_loader, retain_loader, None
 
 
 def _create_dataloaders_label_correction(
-    forget_set: ForgetSet, model_config: BaseConfig
+    forget_set: ForgetSet,
+    model_config: BaseConfig,
+    user_map: Optional[Dict[Any, int]] = None,  # MOD
 ) -> Tuple[DataLoader, DataLoader, DataLoader]:
     import pandas as pd
 
@@ -335,9 +381,9 @@ def _create_dataloaders_label_correction(
     use_glove = "glove" in model_config.model_name.lower()
     tokenizer = None if use_glove else AutoTokenizer.from_pretrained(model_config.model_name)
 
-    forget_dataset = NewsDataset(forget_temp_path, model_config, tokenizer)
-    corrected_dataset = NewsDataset(corrected_temp_path, model_config, tokenizer)
-    retain_dataset = NewsDataset(retain_temp_path, model_config, tokenizer)
+    forget_dataset = NewsDataset(forget_temp_path, model_config, tokenizer, user_map)  # MOD
+    corrected_dataset = NewsDataset(corrected_temp_path, model_config, tokenizer, user_map)  # MOD
+    retain_dataset = NewsDataset(retain_temp_path, model_config, tokenizer, user_map)  # MOD
 
     print(len(forget_dataset), len(corrected_dataset), len(retain_dataset))
 
@@ -377,7 +423,9 @@ def _create_dataloaders_label_correction(
 
 
 def _create_dataloaders(
-    forget_set: ForgetSet, model_config: BaseConfig
+    forget_set: ForgetSet,
+    model_config: BaseConfig,
+    user_map: Optional[Dict[Any, int]] = None,  # MOD
 ) -> Tuple[DataLoader, DataLoader]:
     """Create dataloaders for data removal mode (TWO loaders)."""
     import pandas as pd
@@ -394,8 +442,8 @@ def _create_dataloaders(
     use_glove = "glove" in model_config.model_name.lower()
     tokenizer = None if use_glove else AutoTokenizer.from_pretrained(model_config.model_name)
 
-    forget_dataset = NewsDataset(forget_temp_path, model_config, tokenizer)
-    retain_dataset = NewsDataset(retain_temp_path, model_config, tokenizer)
+    forget_dataset = NewsDataset(forget_temp_path, model_config, tokenizer, user_map)  # MOD
+    retain_dataset = NewsDataset(retain_temp_path, model_config, tokenizer, user_map)  # MOD
 
     forget_loader = DataLoader(
         forget_dataset,

@@ -47,7 +47,7 @@ drop_rate: 0.2
 masking_probability: 0.5
 
 # Training hyperparameters
-epochs: 3  # GloVe typically needs more epochs
+epochs: 1  # GloVe typically needs more epochs
 train_batch_size: 32
 val_batch_size: 64
 learning_rate: 1.0e-3  # Higher LR for GloVe
