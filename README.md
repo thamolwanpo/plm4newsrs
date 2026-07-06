@@ -1,6 +1,6 @@
 # PLM4NewsRS: Pre-trained Language Models for News Recommendation
 
-A comprehensive, modular framework for neural news recommendation supporting multiple state-of-the-art architectures. Train and compare Base, NAML, and NRMS models with BERT, RoBERTa, or GloVe embeddings.
+A research framework for neural news recommendation. Supports four SOTA architectures (Simple, NAML, NRMS, LSTUR) with BERT, RoBERTa, or GloVe backends, with tools to study models under clean and poisoned training data conditions.
 
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-ee4c2c.svg)](https://pytorch.org/)
@@ -9,60 +9,38 @@ A comprehensive, modular framework for neural news recommendation supporting mul
 
 ---
 
-## 🌟 Highlights
+## Highlights
 
-- **🏗️ Three Model Architectures**: Base (two-tower), NAML (multi-view), NRMS (self-attention)
-- **🤖 Multiple PLM Backends**: BERT, RoBERTa, DistilBERT, GPT-2, or GloVe embeddings
-- **⚙️ Flexible Training**: Fine-tune, freeze, or train from scratch
-- **📊 Built-in Comparison**: Benchmark different architectures automatically
-- **🔬 Research-Ready**: Unlearning experiments, poisoning attacks, bias mitigation
-- **⚡ Production-Ready**: PyTorch Lightning, distributed training, comprehensive logging
+- **Four Model Architectures**: Simple (two-tower), NAML (multi-view), NRMS (self-attention), LSTUR (long/short-term user modeling)
+- **Multiple PLM Backends**: BERT, RoBERTa, or GloVe embeddings
+- **Flexible Training**: Fine-tune or freeze PLM layers
+- **Poisoning Support**: Train on clean or poisoned data to study misinformation contamination
+- **Rich Evaluation**: AUC, MRR, NDCG, misinformation exposure metrics, and dedicated analyzers
+- **PyTorch Lightning**: Checkpointing, early stopping, reproducible seeds
 
 ---
 
-## 📋 Table of Contents
+## Table of Contents
 
-- [Why PLM4NewsRS?](#why-plm4newsrs)
 - [Installation](#installation)
+- [Data Format](#data-format)
 - [Quick Start](#quick-start)
 - [Model Architectures](#model-architectures)
 - [Configuration](#configuration)
 - [Training](#training)
-- [Model Comparison](#model-comparison)
-- [Advanced Usage](#advanced-usage)
+- [Evaluation](#evaluation)
 - [API Reference](#api-reference)
+- [Project Structure](#project-structure)
 - [Citation](#citation)
 
 ---
 
-## 🎯 Why PLM4NewsRS?
-
-### The Problem
-Building effective news recommendation systems requires:
-- Understanding complex textual content
-- Modeling user preferences from reading history
-- Comparing different architectural approaches
-- Handling real-world challenges (cold start, bias, misinformation)
-
-### The Solution
-PLM4NewsRS provides a unified framework to:
-
-✅ **Experiment with proven architectures** - Base, NAML (IJCAI'19), NRMS (EMNLP'19)  
-✅ **Leverage pre-trained models** - BERT, RoBERTa, or lightweight GloVe  
-✅ **Compare approaches fairly** - Consistent data pipeline and evaluation  
-✅ **Research novel problems** - Unlearning, debiasing, robustness  
-✅ **Deploy to production** - Clean APIs, checkpointing, monitoring  
-
----
-
-## 🚀 Installation
+## Installation
 
 ### Prerequisites
 - Python 3.8+
-- CUDA-compatible GPU (recommended, 8GB+ VRAM)
-- 16GB+ RAM for BERT/RoBERTa models
+- CUDA-compatible GPU (recommended, 8GB+ VRAM for BERT/RoBERTa)
 
-### Quick Setup
 ```bash
 # Clone the repository
 git clone https://github.com/yourusername/plm4newsrs.git
@@ -70,7 +48,7 @@ cd plm4newsrs
 
 # Create virtual environment
 python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+source venv/bin/activate
 
 # Install dependencies
 pip install -r requirements.txt
@@ -79,162 +57,108 @@ pip install -r requirements.txt
 pip install -e .
 ```
 
-### Verify Installation
-```bash
-python -c "import src; print('✅ Installation successful!')"
-```
-
 ---
 
-## ⚡ Quick Start
+## Data Format
 
-### 1. Prepare Your Data
+The framework expects pairwise CSV files per split:
+
 ```
-your_dataset/
-├── experiment_name/
-│   │── models/
-│   │   ├── train_clean.csv
-│   │   ├── val_clean.csv
-│   │   ├── train_poisoned.csv
-│   │   └── val_poisoned.csv
-│   └── benchmarks/
-|       ├── benchmark_mixed.csv
-│       ├── benchmark_honeypot.csv
-│       └── becnhmark_real_only.csv
+{base_dir}/
+└── {experiment_name}/
+    ├── models/
+    │   ├── train_clean.csv
+    │   ├── val_clean.csv
+    │   ├── train_poisoned.csv   # optional
+    │   └── val_poisoned.csv     # optional
+    ├── benchmarks/
+    │   ├── benchmark_real_only.csv
+    │   ├── benchmark_mixed.csv
+    │   └── benchmark_honeypot.csv
+    └── news_items.csv           # full-text lookup by item_id
 ```
 
-**CSV Format** (pairwise):
+**Pairwise CSV columns:**
 ```csv
-user_id,history_titles,candidate_id,candidate_title,label,candidate_is_fake
-user_1,"['Article 1', 'Article 2']",news_123,"Breaking News",1,0
+user_id,history_ids,candidate_id,candidate_title,label,candidate_is_fake
+user_1,"[1,2,3]",news_123,"Breaking News Title",1,0
+user_1,"[1,2,3]",news_456,"Misleading Story",0,1
 ```
 
-### 2. Train Your First Model
+- `history_ids`: JSON list of previously read item IDs (looked up in `news_items.csv`)
+- `label`: 1 = clicked (positive), 0 = not clicked (negative)
+- `candidate_is_fake`: 1 = misinformation, 0 = real news
+
+Benchmark files use the same format, evaluated with a strict 1 positive + 99 negatives per group.
+
+For LSTUR, a `user_to_idx_map.json` mapping user IDs to integer indices is also required.
+
+---
+
+## Quick Start
+
+### Train a model
 ```bash
-# Base model with BERT
-python scripts/train.py \
-    --config configs/experiments/base_model/bert_finetune.yaml \
-    --model-type clean
+# Simple model with BERT (fine-tune) — trains clean + poisoned splits
+python scripts/train.py --config configs/experiments/simple/bert_finetune.yaml --train-all
 
-# NAML with RoBERTa
-python scripts/train.py \
-    --config configs/experiments/naml/naml_roberta.yaml \
-    --model-type clean
+# NRMS with BERT
+python scripts/train.py --config configs/experiments/nrms/nrms_bert_finetune.yaml --train-all
 
-# NRMS with GloVe (faster, no GPU needed)
-python scripts/train.py \
-    --config configs/experiments/nrms/nrms_glove.yaml \
-    --model-type clean
+# NAML with GloVe
+python scripts/train.py --config configs/experiments/naml/naml_glove.yaml --train-all
+
+# Train only the clean model type
+python scripts/train.py --config configs/experiments/nrms/nrms_bert_finetune.yaml --model-type clean
 ```
 
-### 3. Compare Architectures
+### Evaluate a trained model
 ```bash
-python scripts/compare_models.py \
-    --base-dir ./politifact \
-    --experiment my_experiment \
-    --test-data ./politifact/test.csv \
-    --architectures base naml nrms
+python scripts/evaluate.py --config configs/experiments/nrms/nrms_bert_finetune.yaml
+
+python scripts/evaluate.py --config configs/experiments/nrms/nrms_bert_finetune.yaml \
+    --models clean poisoned \
+    --analyses exposure failure
 ```
 
-### 4. Monitor Training
+### Use Makefile shortcuts
 ```bash
-tensorboard --logdir=./politifact/my_experiment/
+make train-simple-bert-ft      # Simple + BERT fine-tune (all types)
+make train-nrms-all            # All NRMS variants
+make train-naml-all            # All NAML variants
+make evaluate CONFIG=configs/experiments/nrms/nrms_bert_finetune.yaml
 ```
 
 ---
 
-## 🏗️ Model Architectures
+## Model Architectures
 
-### Architecture Overview
+| Model | Paper | Key Innovation | Supported PLMs |
+|-------|-------|----------------|---------------|
+| **Simple** | — | Two-tower with additive attention | BERT, RoBERTa, GloVe |
+| **NAML** | IJCAI'19 | Multi-view: title + body + category CNNs | BERT, RoBERTa, GloVe |
+| **NRMS** | EMNLP'19 | Multi-head self-attention for news & user | BERT, RoBERTa, GloVe |
+| **LSTUR** | — | Long/short-term user interest with masking | GloVe |
 
-| Model | Paper | Key Innovation | Best For |
-|-------|-------|----------------|----------|
-| **Base** | - | Simplified NRMS with PLM  | General purpose, baseline |
-| **NAML** | IJCAI'19 | Multi-view learning (title/body/category) | Rich metadata, diverse features |
-| **NRMS** | EMNLP'19 | Pure multi-head self-attention | Long sequences, complex patterns |
+### Simple: Two-Tower with Attention
 
-### 1. Base Model: Two-Tower with Attention
-
-Simple yet effective architecture with attention mechanisms.
 ```
-┌─────────────────────────────────────────────┐
-│              User Tower                     │
-│  History → PLM → Multi-Head → Additive      │
-│  Articles        Attention    Attention     │
-└─────────────────────────────────────────────┘
-                     │ Dot Product
-┌─────────────────────────────────────────────┐
-│           Candidate Tower                   │
-│  Candidates → PLM → Multi-Head → Additive   │
-│  Articles          Attention    Attention   │
-└─────────────────────────────────────────────┘
+History Articles → PLM → Multi-Head Attention → Additive Attention → User Vector
+                                                                           ↓  dot product
+Candidates       → PLM → Multi-Head Attention → Additive Attention → News Vector
 ```
 
-**Features:**
-- Multi-head self-attention over token embeddings
-- Additive attention for final pooling
-- Simple, fast, effective baseline
+**When to use:** Baseline experiments, limited compute, fast iteration.
 
-**When to use:**
-- Starting point for experiments
-- Limited computational resources
-- General-purpose recommendation
+### NAML: Neural News Recommendation with Attentive Multi-View Learning
 
-**Example Config:**
-```yaml
-model_architecture: base
-model_name: bert-base-uncased
-use_pretrained_lm: true
-fine_tune_lm: true
-num_attention_heads: 16
-news_query_vector_dim: 200
-user_query_vector_dim: 200
+```
+Title    → CNN  ─┐
+Body     → CNN  ─┤→ View-Level Attention → News Vector
+Category → Emb  ─┘
 ```
 
-### 2. NAML: Neural News Recommendation with Attentive Multi-View Learning
-
-Multi-view approach processing different aspects of news articles.
-```
-┌───────────────────────────────────────────────────┐
-│                News Encoder                       │
-│  ┌─────────┐  ┌─────────┐  ┌─────────┐            │
-│  │  Title  │  │  Body   │  │Category │            │
-│  │   CNN   │  │   CNN   │  │Embedding│            │
-│  └────┬────┘  └────┬────┘  └────┬────┘            │
-│       └───────────┬─────────────┘                 │
-│             View-Level Attention                  │
-│                   │                               │
-│              News Vector                          │
-└───────────────────────────────────────────────────┘
-                    │ User-News Matching
-┌───────────────────────────────────────────────────┐
-│               User Encoder                        │
-│  Clicked News → View Aggregation → User Vector    │
-└───────────────────────────────────────────────────┘
-```
-
-**Features:**
-- Separate encoders for title, body, category, subcategory
-- CNN-based text encoding with multiple filter sizes
-- View-level attention to combine information
-- Handles multi-aspect news understanding
-
-**When to use:**
-- Dataset has rich metadata (categories, entities)
-- Need interpretable view importance
-- Different aspects have varying importance
-
-**Example Config:**
-```yaml
-model_architecture: naml
-model_name: bert-base-uncased
-use_title: true
-use_body: true
-use_category: true
-num_filters: 400
-window_size: 3
-query_vector_dim: 200
-```
+**When to use:** Rich metadata available (categories, body text), interpretable view weights needed.
 
 **Reference:**
 ```bibtex
@@ -242,520 +166,302 @@ query_vector_dim: 200
   title={Neural News Recommendation with Attentive Multi-View Learning},
   author={Wu, Chuhan and Wu, Fangzhao and Ge, Suyu and Qi, Tao and Huang, Yongfeng and Xie, Xing},
   booktitle={IJCAI},
+  pages={3863--3869},
   year={2019}
 }
 ```
 
-### 3. NRMS: Neural News Recommendation with Multi-Head Self-Attention
+### NRMS: Neural News Recommendation with Multi-Head Self-Attention
 
-Pure attention-based architecture for news and user encoding.
 ```
-┌───────────────────────────────────────────────────┐
-│              News Encoder                         │
-│  Word Embedding                                   │
-│       ↓                                           │
-│  Multi-Head Self-Attention                        │
-│       ↓                                           │
-│  Additive Attention                               │
-│       ↓                                           │
-│  News Representation                              │
-└───────────────────────────────────────────────────┘
-                    │ Click Prediction
-┌───────────────────────────────────────────────────┐
-│              User Encoder                         │
-│  Browsed News Representations                     │
-│       ↓                                           │
-│  Multi-Head Self-Attention                        │
-│       ↓                                           │
-│  Additive Attention                               │
-│       ↓                                           │
-│  User Representation                              │
-└───────────────────────────────────────────────────┘
+News Encoder:  Tokens → Multi-Head Self-Attention → Additive Attention → News Vector
+User Encoder:  Clicked News Vectors → Multi-Head Self-Attention → Additive Attention → User Vector
 ```
 
-**Features:**
-- Multi-head self-attention for news encoding
-- Multi-head self-attention for user interest modeling
-- Captures complex word/news interactions
-- No recurrence or convolution needed
-
-**When to use:**
-- Long news articles or browsing histories
-- Need to capture complex dependencies
-- Computational resources available
-- Want state-of-the-art performance
-
-**Example Config:**
-```yaml
-model_architecture: nrms
-model_name: bert-base-uncased
-num_attention_heads: 16
-news_query_vector_dim: 200
-user_query_vector_dim: 200
-attention_hidden_dim: 200
-```
+**When to use:** Complex interaction patterns, long histories, best performance.
 
 **Reference:**
 ```bibtex
 @inproceedings{wu2019nrms,
   title={Neural News Recommendation with Multi-Head Self-Attention},
   author={Wu, Fangzhao and Qiao, Ying and Chen, Jiun-Hung and Wu, Chuhan and Qi, Tao and Lian, Jianxun and Liu, Danyang and Xie, Xing and Gao, Jianfeng and Wu, Winnie and Zhou, Ming},
-  booktitle={EMNLP},
+  booktitle={EMNLP-IJCNLP},
+  pages={6389--6394},
   year={2019}
 }
 ```
 
-### Architecture Comparison
+### LSTUR: Long- and Short-Term User Representation
 
-**Benchmark Results** (Politifact-clean dataset):
+Maintains a persistent long-term user embedding alongside a session-based user encoder. Applies random masking during training to balance the two representations.
 
-| Model | PLM | Params | Training Time | AUC | MRR | NDCG@5 | NDCG@10 |
-|-------|-----|--------|---------------|-----|-----|--------|---------|
-
-
-*On single L4 GPU, batch size 32
-
-**Quick Selection Guide:**
-```
-Choose Base if:
-  ✓ You need a strong baseline
-  ✓ You have limited compute resources
-  ✓ You want fast iteration
-
-Choose NAML if:
-  ✓ You have rich metadata (categories, entities, body text)
-  ✓ You need interpretable view importance
-  ✓ Different news aspects have varying relevance
-
-Choose NRMS if:
-  ✓ You want state-of-the-art performance
-  ✓ You have long documents or browsing histories
-  ✓ You have sufficient GPU resources
-  ✓ You need to capture complex patterns
-```
+**When to use:** User identity is stable across sessions; long-term preferences matter.
 
 ---
 
-## ⚙️ Configuration
+## Configuration
 
-### Quick Configuration
+All experiments are driven by YAML config files. The `architecture` field determines which config class and model are loaded.
 
-All models share a common configuration structure with architecture-specific parameters.
-
-**Example: Base Model**
-```yaml
-# configs/experiments/base_model/bert_finetune.yaml
-dataset: politifact
-experiment_name: my_experiment
-model_architecture: base
-model_name: bert-base-uncased
-use_pretrained_lm: true
-fine_tune_lm: true
-
-# Architecture-specific
-num_attention_heads: 16
-news_query_vector_dim: 200
-user_query_vector_dim: 200
-
-# Training
-epochs: 10
-train_batch_size: 16
-learning_rate: 1e-5
-max_seq_length: 50
-max_history_length: 5
-```
-
-**Example: NAML**
-```yaml
-# configs/experiments/naml/naml_bert.yaml
-model_architecture: naml
-model_name: bert-base-uncased
-
-# NAML-specific
-use_title: true
-use_body: true
-use_category: true
-use_subcategory: false
-num_filters: 400
-window_size: 3
-query_vector_dim: 200
-max_body_length: 100
-```
-
-**Example: NRMS**
-```yaml
-# configs/experiments/nrms/nrms_bert.yaml
-model_architecture: nrms
-model_name: bert-base-uncased
-
-# NRMS-specific
-num_attention_heads: 16
-news_query_vector_dim: 200
-user_query_vector_dim: 200
-attention_hidden_dim: 200
-```
-
-### Common Parameters
+**Common parameters:**
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `model_architecture` | `base` | One of: `base`, `naml`, `nrms` |
-| `model_name` | `bert-base-uncased` | HuggingFace model or `glove` |
-| `use_pretrained_lm` | `true` | Use pre-trained weights |
-| `fine_tune_lm` | `true` | Fine-tune or freeze LM |
+| `architecture` | `simple` | One of: `simple`, `naml`, `nrms`, `lstur` |
+| `model_name` | `bert-base-uncased` | HuggingFace model ID or `glove` |
+| `fine_tune_lm` | `true` | Fine-tune (`true`) or freeze (`false`) PLM |
 | `max_seq_length` | `50` | Max tokens per article |
 | `max_history_length` | `5` | Max articles in user history |
 | `epochs` | `10` | Training epochs |
-| `learning_rate` | `1e-5` | Adam learning rate |
+| `train_batch_size` | `16` | Training batch size |
+| `learning_rate` | `1e-5` | AdamW learning rate |
+| `early_stopping_patience` | `3` | Epochs without val_auc improvement before stopping |
+| `gradient_clip_val` | `1.0` | Gradient clipping |
 | `drop_rate` | `0.2` | Dropout probability |
+| `seed` | `42` | Random seed |
+| `dataset` | `politifact` | Dataset name (`politifact` or `gossipcop`) |
+| `experiment_name` | `experiment_1` | Subfolder name under `base_dir` |
+| `model_type` | `clean` | `clean` or `poisoned` |
 
-### Language Model Options
+**Example: NRMS with BERT fine-tune**
 ```yaml
-# BERT variants
-model_name: bert-base-uncased          # 110M params
-model_name: bert-large-uncased         # 340M params
-model_name: distilbert-base-uncased    # 66M params (faster)
+# configs/experiments/nrms/nrms_bert_finetune.yaml
+architecture: nrms
+dataset: politifact
+model_name: bert-base-uncased
+fine_tune_lm: true
+max_seq_length: 30
+max_history_length: 30
+num_attention_heads: 16
+attention_hidden_dim: 200
+epochs: 3
+train_batch_size: 16
+learning_rate: 2.0e-5
+early_stopping_patience: 3
+```
 
-# RoBERTa variants
-model_name: roberta-base               # 125M params
-model_name: roberta-large              # 355M params
-model_name: distilroberta-base         # 82M params
-
-# Other models
-model_name: albert-base-v2             # 12M params (parameter sharing)
-model_name: electra-base-discriminator # 110M params (efficient)
-
-# GloVe (no GPU needed)
+**Example: NAML with GloVe**
+```yaml
+architecture: naml
 model_name: glove
-glove_model: glove-wiki-gigaword-300
+use_title: true
+use_body: false
+use_category: false
+num_filters: 200
+window_sizes: [3]
+query_vector_dim: 200
 glove_dim: 300
-glove_aggregation: mean  # or 'max', 'attention'
 ```
+
+**Example: LSTUR**
+```yaml
+architecture: lstur
+model_name: glove
+num_users: 50001
+user_embedding_dim: 50
+long_short_term_method: ini   # 'ini' or 'con'
+masking_probability: 0.5
+```
+
+Pre-built configs live in `configs/experiments/{simple,naml,nrms,lstur}/`.
 
 ---
 
-## 🎓 Training
+## Training
 
-### Single Model Training
+### CLI
+
 ```bash
-# Train Base model with BERT
-python scripts/train.py \
-    --config configs/experiments/base_model/bert_finetune.yaml \
-    --model-type clean \
-    --gpu 0
+# Auto-discover and train all available split types (clean, poisoned, …)
+python scripts/train.py --config configs/experiments/nrms/nrms_bert_finetune.yaml --train-all
 
-# Train NAML with RoBERTa
-python scripts/train.py \
-    --config configs/experiments/naml/naml_roberta.yaml \
-    --model-type clean \
-    --gpu 0
-
-# Train NRMS with GloVe (CPU-friendly)
-python scripts/train.py \
-    --config configs/experiments/nrms/nrms_glove.yaml \
-    --model-type clean
+# Train only one model type
+python scripts/train.py --config configs/experiments/nrms/nrms_bert_finetune.yaml --model-type clean
+python scripts/train.py --config configs/experiments/nrms/nrms_bert_finetune.yaml --model-type poisoned
 ```
 
-### Programmatic Training
+**Key flags:**
+
+| Flag | Description |
+|------|-------------|
+| `--config FILE` | Path to YAML config (required) |
+| `--train-all` | Train all discovered model types (clean, poisoned, …) |
+| `--model-type TYPE` | Train a specific type only |
+
+Checkpoints are saved to `{base_dir}/{experiment_name}/{lm_folder}/checkpoints/` as `{type}-*.ckpt`. The top-3 by `val_auc` are retained; early stopping is applied.
+
+### Programmatic
+
 ```python
-from configs.models.naml_config import NAMLConfig
+from configs.config_loader import load_config
 from src.training.trainer import train_model
-from src.utils.seed import set_seed
 
-# Configure NAML
-config = NAMLConfig(
-    dataset="politifact",
-    experiment_name="my_experiment",
-    model_name="bert-base-uncased",
-    use_pretrained_lm=True,
-    fine_tune_lm=True,
-    use_title=True,
-    use_body=True,
-    use_category=True,
-    epochs=10,
-    learning_rate=1e-5
-)
-
-# Train
-set_seed(config.seed)
-best_model_path = train_model(config)
-print(f"Best model: {best_model_path}")
-```
-
-### Batch Training
-
-Train all architectures with all PLM backends:
-```bash
-# Train all models for comparison
-python scripts/train_all.py \
-    --dataset politifact \
-    --experiment my_experiment \
-    --architectures base naml nrms \
-    --plms bert roberta glove
-```
-
-This trains 9 models:
-- Base + BERT/RoBERTa/GloVe
-- NAML + BERT/RoBERTa/GloVe
-- NRMS + BERT/RoBERTa/GloVe
-
----
-
-## 📊 Model Comparison
-
-### Compare All Architectures
-```bash
-python scripts/compare_models.py \
-    --base-dir ./politifact \
-    --experiment my_experiment \
-    --test-data ./politifact/benchmark_real_only.csv \
-    --architectures base naml nrms \
-    --output comparison_results.csv
-```
-
-**Output:**
-```
-═══════════════════════════════════════════════════════════
-                    MODEL COMPARISON
-═══════════════════════════════════════════════════════════
-Architecture  PLM       AUC     MRR     NDCG@5  NDCG@10  Time
-───────────────────────────────────────────────────────────
-
-───────────────────────────────────────────────────────────
-```
-
-### Visualize Comparisons
-```python
-from src.evaluation.visualizer import plot_comparison
-
-plot_comparison(
-    results_csv='comparison_results.csv',
-    metrics=['auc', 'mrr', 'ndcg@5'],
-    output='comparison_plot.png'
-)
-```
-
-### Statistical Significance Testing
-```python
-from src.evaluation.statistics import significance_test
-
-# Compare NAML vs Base
-p_value = significance_test(
-    model1_predictions='naml_predictions.npy',
-    model2_predictions='base_predictions.npy',
-    test='paired_t_test'
-)
-
-print(f"p-value: {p_value:.4f}")
-print(f"Significant? {p_value < 0.05}")
+config = load_config("configs/experiments/nrms/nrms_bert_finetune.yaml")
+best_ckpt = train_model(config)
+print(f"Best checkpoint: {best_ckpt}")
 ```
 
 ---
 
-## 🔬 Advanced Usage
+## Evaluation
 
-### 1. Unlearning Experiments
-
-Remove learned biases or misinformation from trained models:
-```python
-from configs.models.nrms_config import NRMSConfig
-from src.training.unlearning import unlearn_model
-
-# Train on poisoned data
-config = NRMSConfig(
-    model_type="poisoned",
-    epochs=10
-)
-poisoned_model = train_model(config)
-
-# Unlearn with clean data
-config.model_name = poisoned_model  # Load poisoned weights
-config.model_type = "clean"
-config.learning_rate = 1e-6  # Lower LR for unlearning
-config.epochs = 5
-
-clean_model = unlearn_model(config)
-```
-
-### 2. Transfer Learning
-
-Use a model trained on one dataset for another:
-```python
-config = NAMLConfig(
-    model_name="/path/to/gossipcop_trained_model",
-    dataset="politifact",  # New dataset
-    fine_tune_lm=True,
-    learning_rate=5e-6,  # Lower LR
-    epochs=5
-)
-
-transferred_model = train_model(config)
-```
-
-### 3. Ensemble Models
-
-Combine predictions from multiple architectures:
-```python
-from src.models.ensemble import EnsembleRecommender
-
-ensemble = EnsembleRecommender(
-    models=[
-        'checkpoints/base_model.ckpt',
-        'checkpoints/naml_model.ckpt',
-        'checkpoints/nrms_model.ckpt'
-    ],
-    weights=[0.3, 0.4, 0.3]  # Or learn weights automatically
-)
-
-predictions = ensemble.predict(test_data)
-```
-
-### 4. Custom Architecture
-
-Add your own architecture:
-```python
-# src/models/custom/my_model.py
-from src.models.components.encoders import BaseNewsEncoder
-from src.models.components.attention import MultiHeadAttention
-
-class MyCustomModel(nn.Module):
-    def __init__(self, config):
-        super().__init__()
-        self.news_encoder = BaseNewsEncoder(config)
-        self.user_encoder = MyCustomUserEncoder(config)
-        # ... your architecture
-    
-    def forward(self, batch):
-        # ... your forward pass
-        return scores
-
-# Register your model
-from src.models.registry import MODEL_REGISTRY
-MODEL_REGISTRY['custom'] = MyCustomModel
-```
-
-### 5. Distributed Training
-
-Train on multiple GPUs:
 ```bash
-# Multi-GPU training
-python scripts/train.py \
-    --config configs/experiments/naml/naml_bert.yaml \
-    --strategy ddp \
-    --devices 4 \
-    --nodes 1
+# Evaluate all discovered checkpoints on all benchmarks
+python scripts/evaluate.py --config configs/experiments/nrms/nrms_bert_finetune.yaml
 
-# Multi-node training
-python scripts/train.py \
-    --config configs/experiments/nrms/nrms_roberta.yaml \
-    --strategy ddp \
-    --devices 8 \
-    --nodes 4 \
-    --num-workers 32
+# Restrict to specific model types and analyses
+python scripts/evaluate.py --config configs/experiments/nrms/nrms_bert_finetune.yaml \
+    --models clean poisoned \
+    --analyses exposure failure \
+    --top-k 10
+
+# Metrics only — skip analyzers
+python scripts/evaluate.py --config configs/experiments/nrms/nrms_bert_finetune.yaml \
+    --no-analysis
 ```
+
+**Key flags:**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--config FILE` | — | Path to YAML config (required) |
+| `--models TYPE…` | all | Checkpoint types to load |
+| `--analyses TYPE…` | all | `exposure`, `truth_decay`, `failure` |
+| `--no-analysis` | off | Skip analyzers, compute metrics only |
+| `--top-k K` | 10 | Top-K for exposure/NDCG metrics |
+
+### Metrics
+
+**Ranking:** AUC, MRR, NDCG@K, Recall@K
+
+**Misinformation:**
+- `MC@K` — Misinformation Count at K: fraction of top-K that is fake
+- `avg_fake_count` — Average fake items in top-K across users
+- `users_with_fake_pct` — Percentage of users exposed to at least one fake item
+- `avg_min_fake_rank` — Average first position where fake news appears
+
+### Analyzers
+
+| Analyzer | `--analyses` key | What it measures |
+|----------|-----------------|-----------------|
+| `ExposureAnalyzer` | `exposure` | Fake news exposure in top-K per user |
+| `TruthDecayAnalyzer` | `truth_decay` | Rank distribution of fake vs real items |
+| `FailureAnalyzer` | `failure` | Rate at which a negative outscores the positive |
 
 ---
 
-## 📚 API Reference
+## API Reference
 
-### Key Classes
+### Configuration
+
 ```python
-# Configuration
-from configs.base_config import BaseConfig
+from configs.config_loader import load_config
+from configs.models.simple_config import ModelConfig
 from configs.models.naml_config import NAMLConfig
 from configs.models.nrms_config import NRMSConfig
+from configs.models.lstur_config import LSTURConfig
 
-# Models
-from src.models.base.recommender import RecommenderModel
-from src.models.naml.recommender import NAMLRecommender
-from src.models.nrms.recommender import NRMSRecommender
-
-# Training
-from src.training.trainer import train_model, train_all_models
-from src.training.callbacks import CustomCheckpoint, MetricLogger
-
-# Evaluation
-from src.evaluation.evaluator import evaluate_model
-from src.evaluation.metrics import calculate_auc, calculate_ndcg
-
-# Data
-from src.data.dataset import NewsDataset
-from src.data.preprocessing import convert_pairwise_to_listwise
+config = load_config("configs/experiments/nrms/nrms_bert_finetune.yaml")
 ```
 
-### Model Registry
+### Models
+
 ```python
-from src.models.registry import get_model, list_models
+from src.models.registry import get_model, get_model_class
 
-# List available architectures
-print(list_models())  # ['base', 'naml', 'nrms']
+model = get_model("nrms", config)     # LitNRMSRecommender
+model = get_model("naml", config)     # LitNAMLRecommender
+model = get_model("simple", config)   # LitSimpleRecommender
+model = get_model("lstur", config)    # LitLSTURRecommender
 
-# Load model dynamically
-model = get_model('naml', config)
+cls = get_model_class("nrms")
+```
+
+### Training
+
+```python
+from src.training.trainer import train_model
+
+best_ckpt_path = train_model(config)
+```
+
+### Evaluation
+
+```python
+from src.evaluation.evaluator import ModelEvaluator
+
+evaluator = ModelEvaluator(
+    config=config,
+    enable_analyses=["exposure", "failure"],
+)
+results_df = evaluator.evaluate_all(model_types=["clean", "poisoned"])
+```
+
+### Data
+
+```python
+from src.data.dataset import BaseNewsDataset
+from src.data.preprocessing import convert_pairwise_to_listwise
+
+dataset = BaseNewsDataset(csv_path, config)
+listwise_df = convert_pairwise_to_listwise(pairwise_df, config)
 ```
 
 ---
 
-## 🧪 Testing
-```bash
-# Run all tests
-pytest tests/ -v
+## Project Structure
 
-# Test specific architecture
-pytest tests/test_naml.py -v
-
-# Test with coverage
-pytest --cov=src tests/
-
-# Test specific functionality
-pytest tests/test_training.py::test_multi_gpu_training -v
-```
-
----
-
-## 📦 Project Structure
 ```
 plm4newsrs/
-├── configs/                   # Configuration files
-│   ├── base_config.py         # Shared configuration
-│   ├── models/                # Model-specific configs
-│   │   ├── base_model_config.py
+├── configs/
+│   ├── base_config.py          # Shared BaseConfig dataclass
+│   ├── config_loader.py        # load_config / load_unlearning_config
+│   ├── config_registry.py      # Architecture → config class mapping
+│   ├── models/                 # Architecture-specific config dataclasses
+│   │   ├── simple_config.py
 │   │   ├── naml_config.py
-│   │   └── nrms_config.py
-│   └── experiments/           # YAML experiment configs
+│   │   ├── nrms_config.py
+│   │   └── lstur_config.py
+│   └── experiments/            # YAML experiment configs
+│       ├── simple/
+│       ├── naml/
+│       ├── nrms/
+│       ├── lstur/
+│       └── unlearning/
 ├── src/
-│   ├── data/                  # Data loading & preprocessing
-│   ├── models/                # Model architectures
-│   │   ├── base/              # Base model
-│   │   ├── naml/              # NAML architecture
-│   │   ├── nrms/              # NRMS architecture
-│   │   ├── components/        # Shared components
-│   │   └── registry.py        # Model factory
-│   ├── embeddings/            # Embedding utilities
-│   ├── training/              # Training & callbacks
-│   ├── evaluation/            # Metrics & evaluation
-│   └── utils/                 # Utilities
-├── scripts/                   # Training & evaluation scripts
-├── notebooks/                 # Jupyter notebooks
-├── lm_models/                 # LM models including GloVe
-└── tests/                     # Unit tests
+│   ├── data/                   # Dataset, preprocessing, collate
+│   ├── embeddings/             # GloVe utilities
+│   ├── models/
+│   │   ├── registry.py         # get_model / get_model_class
+│   │   ├── components/         # Shared attention, encoders, layers
+│   │   ├── simple/
+│   │   ├── naml/
+│   │   ├── nrms/
+│   │   └── lstur/
+│   ├── training/               # trainer.py, callbacks.py
+│   ├── evaluation/
+│   │   ├── evaluator.py
+│   │   ├── benchmark_dataset.py
+│   │   ├── visualizer.py
+│   │   ├── metrics/            # ranking.py, misinformation.py, utility.py
+│   │   └── analyzers/          # exposure, truth_decay, failure, unlearning
+│   └── utils/                  # paths.py, seed.py
+├── scripts/
+│   ├── train.py
+│   └── evaluate.py
+├── notebooks/
+│   └── Benchmarks_Analysis.ipynb
+├── Makefile
+├── train.sh
+├── eval.sh
+└── requirements.txt
 ```
 
 ---
 
-## 📝 Citation
+## Citation
 
-<!-- If you use PLM4NewsRS in your research, please cite:
-```bibtex
-@software{plm4newsrs2025,
-  title={PLM4NewsRS: A Multi-Architecture Framework for News Recommendation with Pre-trained Language Models},
-  author={Your Name},
-  year={2025},
-  url={https://github.com/yourusername/plm4newsrs}
-}
-``` -->
-
-And cite the original papers for specific architectures:
+Cite the original papers for the architectures used:
 
 **NAML:**
 ```bibtex
@@ -781,16 +487,16 @@ And cite the original papers for specific architectures:
 
 ---
 
-## 📄 License
+## License
 
 This project is licensed under the MIT License - see [LICENSE](LICENSE) file for details.
 
 ---
 
-## 🙏 Acknowledgments
+## Acknowledgments
 
 - **PyTorch Lightning** - Training framework
-- **Hugging Face Transformers** - Pre-trained models
+- **Hugging Face Transformers** - Pre-trained language models
 - **Microsoft Research** - NAML & NRMS architectures
 - **Stanford NLP** - GloVe embeddings
 - FakeNewsNet dataset creators
