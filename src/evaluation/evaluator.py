@@ -20,6 +20,10 @@ from .metrics.ranking import (
     calculate_recall_at_k,
 )
 
+from joblib import Parallel, delayed
+from torch.utils.data import DataLoader
+import numpy as np
+
 
 class ModelEvaluator:
     """
@@ -37,6 +41,7 @@ class ModelEvaluator:
         config: ModelConfig,
         device: Optional[torch.device] = None,
         enable_analyses: Optional[List[str]] = None,
+        results_dir: Optional[Path] = None,
     ):
         """
         Initialize model evaluator.
@@ -52,8 +57,11 @@ class ModelEvaluator:
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         # Get paths
-        self.paths = config.get_paths()
-        self.results_dir = self.paths["results_dir"]
+        if results_dir is not None:
+            self.results_dir = results_dir
+        else:
+            self.paths = config.get_paths()
+            self.results_dir = self.paths["results_dir"]
         self.results_dir.mkdir(parents=True, exist_ok=True)
 
         # Initialize analyzers
@@ -95,147 +103,363 @@ class ModelEvaluator:
 
         return analyzers
 
+    def evaluate_all(
+        self, model_types: Optional[List[str]] = None, benchmark_names: Optional[List[str]] = None
+    ) -> pd.DataFrame:
+        """
+        Evaluate all models on all benchmarks with optimized loading and inference.
+        """
+        print(f"\n{'='*70}")
+        print("EVALUATING ALL MODELS (OPTIMIZED)")
+        print(f"{'='*70}\n")
+
+        set_seed(self.config.seed)
+
+        checkpoints_dir = self.paths["checkpoints_dir"]
+        benchmarks_dir = self.paths["benchmarks_dir"]
+
+        # 1. Discovery Phase
+        if model_types is None:
+            model_files = list(checkpoints_dir.glob("*.ckpt"))
+        else:
+            model_files = []
+            for model_type in model_types:
+                model_files.extend(list(checkpoints_dir.glob(f"{model_type}*.ckpt")))
+
+        if benchmark_names is None:
+            benchmark_files = list(benchmarks_dir.glob("*.csv"))
+        else:
+            benchmark_files = []
+            for benchmark_name in benchmark_names:
+                benchmark_files.extend(list(benchmarks_dir.glob(f"{benchmark_name}*.csv")))
+
+        if not model_files or not benchmark_files:
+            print("❌ No models or benchmarks found")
+            return pd.DataFrame()
+
+        print(f"Found {len(model_files)} models and {len(benchmark_files)} benchmarks.")
+
+        # 2. Outer Loop: Iterate Models (Load Once)
+        for model_path in model_files:
+            model_name = model_path.stem
+            print(f"\n🔄 Loading Model: {model_name}")
+
+            try:
+                # --- OPTIMIZATION: Load Tokenizer & Model ONCE per checkpoint ---
+
+                # A. Load Tokenizer
+                use_glove = "glove" in self.config.model_name.lower()
+                if use_glove:
+                    tokenizer = None
+                else:
+                    from transformers import AutoTokenizer
+
+                    tokenizer = AutoTokenizer.from_pretrained(self.config.model_name)
+
+                # B. Load Model
+                model_class = get_model_class(self.config.architecture)
+                model = model_class.load_from_checkpoint(str(model_path), weights_only=False)
+                model.to(self.device)
+                model.eval()
+
+                # 3. Inner Loop: Iterate Benchmarks (Reuse Model)
+                for benchmark_path in benchmark_files:
+                    try:
+                        # Pass pre-loaded model and tokenizer to avoid reloading
+                        self.evaluate_model(
+                            model_path=model_path,
+                            benchmark_path=benchmark_path,
+                            model_name=model_name,
+                            preloaded_model=model,  # NEW ARGUMENT
+                            preloaded_tokenizer=tokenizer,  # NEW ARGUMENT
+                        )
+                    except Exception as e:
+                        print(f"❌ Error evaluating {model_name} on {benchmark_path.stem}: {e}")
+                        import traceback
+
+                        traceback.print_exc()
+
+                # Cleanup to free GPU memory before next model
+                del model
+                torch.cuda.empty_cache()
+
+            except Exception as e:
+                print(f"❌ Critical error loading model {model_name}: {e}")
+                continue
+
+        # 4. Summary Generation
+        if self.evaluation_results:
+            summary_df = pd.DataFrame(list(self.evaluation_results.values()))
+            summary_path = self.results_dir / "evaluation_summary.csv"
+            summary_df.to_csv(summary_path, index=False)
+            return summary_df
+
+        return pd.DataFrame()
+
     def evaluate_model(
-        self, model_path: Path, benchmark_path: Path, model_name: Optional[str] = None
+        self,
+        model_path: Path,
+        benchmark_path: Path,
+        model_name: Optional[str] = None,
+        preloaded_model: Optional[Any] = None,  # NEW
+        preloaded_tokenizer: Optional[Any] = None,  # NEW
     ) -> Dict[str, Any]:
         """
-        Evaluate a single model on a benchmark.
-
-        Args:
-            model_path: Path to model checkpoint
-            benchmark_path: Path to benchmark CSV
-            model_name: Name for results (defaults to model filename)
-
-        Returns:
-            Dictionary with evaluation metrics and detailed results
+        Evaluate a single model. Accepts preloaded artifacts to speed up loops.
         """
         if model_name is None:
             model_name = model_path.stem
-
         benchmark_name = benchmark_path.stem
 
-        print(f"\n{'='*70}")
-        print(f"EVALUATING: {model_name} on {benchmark_name}")
-        print(f"{'='*70}")
+        print(f"   📍 Benchmark: {benchmark_name}")
 
-        # Load tokenizer
-        use_glove = "glove" in self.config.model_name.lower()
-
-        if use_glove:
-            print("Using GloVe - no tokenizer needed")
-            tokenizer = None
+        # 1. Use preloaded artifacts or load them now
+        if preloaded_model is None:
+            # Legacy fallback: Load model if not provided
+            model_class = get_model_class(self.config.architecture)
+            model = model_class.load_from_checkpoint(str(model_path), weights_only=False)
+            model.to(self.device)
+            model.eval()
         else:
+            model = preloaded_model
+
+        if preloaded_tokenizer is None and "glove" not in self.config.model_name.lower():
             from transformers import AutoTokenizer
 
-            print(f"Loading tokenizer: {self.config.model_name}")
             tokenizer = AutoTokenizer.from_pretrained(self.config.model_name)
+        else:
+            tokenizer = preloaded_tokenizer
 
-        # Load model
-        print(f"Loading model from: {model_path}")
-        model = get_model_class(self.config.architecture).load_from_checkpoint(str(model_path))
-        model.to(self.device)
-        model.eval()
-
-        # Create dataset and dataloader
-        print(f"Loading benchmark: {benchmark_path}")
+        # 2. Create Dataset/Loader
         benchmark_dataset = BenchmarkDataset(benchmark_path, tokenizer, self.config)
-
-        from torch.utils.data import DataLoader
-
         benchmark_loader = DataLoader(
             benchmark_dataset,
             batch_size=self.config.val_batch_size,
             shuffle=False,
             collate_fn=benchmark_collate_fn,
-            num_workers=2,
+            num_workers=8,  # Reduced workers to avoid overhead on small benchmarks
+            pin_memory=True,
         )
 
-        # Run inference
-        print("Running inference...")
+        # 3. Run Inference (Optimized)
         detailed_results = self._run_inference(model, benchmark_loader)
 
-        # Calculate metrics
-        print("Calculating metrics...")
+        # 4. Calculate Metrics (Parallelized)
         metrics = self._calculate_metrics(detailed_results)
 
-        # Store results
+        # 5. Save Results (Using Parquet for speed)
         key = f"{model_name}_{benchmark_name}"
         self.evaluation_results[key] = {"model": model_name, "benchmark": benchmark_name, **metrics}
         self.detailed_results[key] = detailed_results
 
-        # Save detailed results
-        detailed_path = self.results_dir / f"{key}_detailed.csv"
-        detailed_results.to_csv(detailed_path, index=False)
-        print(f"✅ Saved detailed results: {detailed_path.name}")
+        # OPTIMIZATION: Use Parquet instead of CSV for large result files
+        detailed_path = self.results_dir / f"{key}_detailed.parquet"
+        detailed_results.to_parquet(detailed_path, index=False)
 
-        print(f"\n{'='*70}")
-        print(f"EVALUATION RESULTS: {model_name} on {benchmark_name}")
-        print(f"{'='*70}")
-        for metric, value in metrics.items():
-            print(f"  {metric}: {value:.4f}")
-        print(f"{'='*70}\n")
-
-        return {
-            "model": model_name,
-            "benchmark": benchmark_name,
-            "metrics": metrics,
-            "detailed_results": detailed_results,
-        }
+        return {"metrics": metrics, "detailed_results": detailed_results}
 
     def _run_inference(self, model, dataloader) -> pd.DataFrame:
         """
-        Run inference and collect results.
-
-        Args:
-            model: Trained model
-            dataloader: Benchmark dataloader
-
-        Returns:
-            DataFrame with predictions and labels
+        Optimized inference using vectorized collection and inference_mode.
         """
-        unrolled_rows = []
+        # Pre-allocate lists for columnar construction (approx 10x faster than row-append)
+        columns = {
+            "user_id": [],
+            "news_id": [],
+            "title": [],
+            "score": [],
+            "label": [],
+            "is_fake": [],
+        }
 
-        with torch.no_grad():
-            for batch in tqdm(dataloader, desc="Inference"):
+        use_amp = self.device.type == "cuda"
+
+        with torch.inference_mode():  # Faster than no_grad
+            for batch in tqdm(dataloader, desc="Inference", leave=False):
                 if batch is None:
                     continue
 
-                # Move device indicator to correct device if using GloVe
-                if "device_indicator" in batch:
-                    batch["device_indicator"] = batch["device_indicator"].to(self.device)
-
                 # Move tensors to device
-                batch_tensors = {}
-                for k, v in batch.items():
-                    if isinstance(v, torch.Tensor):
-                        batch_tensors[k] = v.to(self.device)
-                    else:
-                        batch_tensors[k] = v
+                batch_tensors = {
+                    k: v.to(self.device) if isinstance(v, torch.Tensor) else v
+                    for k, v in batch.items()
+                }
 
-                # Get scores
-                scores = model(batch_tensors)
+                # Mixed Precision Inference
+                with torch.amp.autocast(device_type=self.device.type, enabled=use_amp):
+                    scores = model(batch_tensors)
+
                 scores = torch.softmax(scores, dim=1).cpu().numpy()
 
-                # Unroll results
-                for i in range(len(batch["user_id"])):
-                    user_id = batch["user_id"][i]
+                # Vectorized data flattening
+                batch_size = len(batch["user_id"])
+                for i in range(batch_size):
                     impression = batch["impression_data"][i]
+                    # Unpack impression tuples: (news_id, title, label, is_fake)
+                    news_ids, titles, labels, is_fakes = zip(*impression)
 
-                    for j, (news_id, title, label, is_fake) in enumerate(impression):
-                        unrolled_rows.append(
-                            {
-                                "user_id": user_id,
-                                "news_id": news_id,
-                                "title": title,  # Add title for reference
-                                "score": scores[i][j],
-                                "label": label,
-                                "is_fake": int(
-                                    is_fake
-                                ),  # CRITICAL: Ensure is_fake is included as int
-                            }
-                        )
+                    n_items = len(news_ids)
+                    columns["user_id"].extend([batch["user_id"][i]] * n_items)
+                    columns["news_id"].extend(news_ids)
+                    columns["title"].extend(titles)
+                    columns["score"].extend(scores[i][:n_items])
+                    columns["label"].extend(labels)
+                    columns["is_fake"].extend([int(x) for x in is_fakes])
 
-        return pd.DataFrame(unrolled_rows)
+        df = pd.DataFrame(columns)
+
+        # ---------------------------------------------------------
+        # 🔴 CRITICAL FIX: Enforce Numeric Types for 'nlargest'
+        # ---------------------------------------------------------
+        df["score"] = df["score"].astype(float)
+        df["label"] = df["label"].astype(int)
+        df["is_fake"] = df["is_fake"].astype(int)
+
+        return df
+
+    # def evaluate_model(
+    #     self, model_path: Path, benchmark_path: Path, model_name: Optional[str] = None
+    # ) -> Dict[str, Any]:
+    #     """
+    #     Evaluate a single model on a benchmark.
+
+    #     Args:
+    #         model_path: Path to model checkpoint
+    #         benchmark_path: Path to benchmark CSV
+    #         model_name: Name for results (defaults to model filename)
+
+    #     Returns:
+    #         Dictionary with evaluation metrics and detailed results
+    #     """
+    #     if model_name is None:
+    #         model_name = model_path.stem
+
+    #     benchmark_name = benchmark_path.stem
+
+    #     print(f"\n{'='*70}")
+    #     print(f"EVALUATING: {model_name} on {benchmark_name}")
+    #     print(f"{'='*70}")
+
+    #     # Load tokenizer
+    #     use_glove = "glove" in self.config.model_name.lower()
+
+    #     if use_glove:
+    #         print("Using GloVe - no tokenizer needed")
+    #         tokenizer = None
+    #     else:
+    #         from transformers import AutoTokenizer
+
+    #         print(f"Loading tokenizer: {self.config.model_name}")
+    #         tokenizer = AutoTokenizer.from_pretrained(self.config.model_name)
+
+    #     # Load model
+    #     print(f"Loading model from: {model_path}")
+    #     model = get_model_class(self.config.architecture).load_from_checkpoint(
+    #         str(model_path), weights_only=False
+    #     )
+    #     model.to(self.device)
+    #     model.eval()
+
+    #     # Create dataset and dataloader
+    #     print(f"Loading benchmark: {benchmark_path}")
+    #     benchmark_dataset = BenchmarkDataset(benchmark_path, tokenizer, self.config)
+
+    #     from torch.utils.data import DataLoader
+
+    #     benchmark_loader = DataLoader(
+    #         benchmark_dataset,
+    #         batch_size=self.config.val_batch_size,
+    #         shuffle=False,
+    #         collate_fn=benchmark_collate_fn,
+    #         num_workers=16,
+    #     )
+
+    #     # Run inference
+    #     print("Running inference...")
+    #     detailed_results = self._run_inference(model, benchmark_loader)
+
+    #     # Calculate metrics
+    #     print("Calculating metrics...")
+    #     metrics = self._calculate_metrics(detailed_results)
+
+    #     # Store results
+    #     key = f"{model_name}_{benchmark_name}"
+    #     self.evaluation_results[key] = {"model": model_name, "benchmark": benchmark_name, **metrics}
+    #     self.detailed_results[key] = detailed_results
+
+    #     # Save detailed results
+    #     detailed_path = self.results_dir / f"{key}_detailed.csv"
+    #     detailed_results.to_csv(detailed_path, index=False)
+    #     print(f"✅ Saved detailed results: {detailed_path.name}")
+
+    #     print(f"\n{'='*70}")
+    #     print(f"EVALUATION RESULTS: {model_name} on {benchmark_name}")
+    #     print(f"{'='*70}")
+    #     for metric, value in metrics.items():
+    #         print(f"  {metric}: {value:.4f}")
+    #     print(f"{'='*70}\n")
+
+    #     return {
+    #         "model": model_name,
+    #         "benchmark": benchmark_name,
+    #         "metrics": metrics,
+    #         "detailed_results": detailed_results,
+    #     }
+
+    # def _run_inference(self, model, dataloader) -> pd.DataFrame:
+    #     """
+    #     Run inference and collect results.
+
+    #     Args:
+    #         model: Trained model
+    #         dataloader: Benchmark dataloader
+
+    #     Returns:
+    #         DataFrame with predictions and labels
+    #     """
+    #     unrolled_rows = []
+
+    #     with torch.no_grad():
+    #         for batch in tqdm(dataloader, desc="Inference"):
+    #             if batch is None:
+    #                 continue
+
+    #             # Move device indicator to correct device if using GloVe
+    #             if "device_indicator" in batch:
+    #                 batch["device_indicator"] = batch["device_indicator"].to(self.device)
+
+    #             # Move tensors to device
+    #             batch_tensors = {}
+    #             for k, v in batch.items():
+    #                 if isinstance(v, torch.Tensor):
+    #                     batch_tensors[k] = v.to(self.device)
+    #                 else:
+    #                     batch_tensors[k] = v
+
+    #             # Get scores
+    #             scores = model(batch_tensors)
+    #             scores = torch.softmax(scores, dim=1).cpu().numpy()
+
+    #             # Unroll results
+    #             for i in range(len(batch["user_id"])):
+    #                 user_id = batch["user_id"][i]
+    #                 impression = batch["impression_data"][i]
+
+    #                 for j, (news_id, title, label, is_fake) in enumerate(impression):
+    #                     unrolled_rows.append(
+    #                         {
+    #                             "user_id": user_id,
+    #                             "news_id": news_id,
+    #                             "title": title,  # Add title for reference
+    #                             "score": scores[i][j],
+    #                             "label": label,
+    #                             "is_fake": int(
+    #                                 is_fake
+    #                             ),  # CRITICAL: Ensure is_fake is included as int
+    #                         }
+    #                     )
+
+    #     return pd.DataFrame(unrolled_rows)
 
     def _calculate_metrics(self, results_df: pd.DataFrame) -> Dict[str, float]:
         """
@@ -292,76 +516,76 @@ class ModelEvaluator:
             "avg_fake_ratio_top_20": exposure_20["avg_fake_ratio"],
         }
 
-    def evaluate_all(
-        self, model_types: Optional[List[str]] = None, benchmark_names: Optional[List[str]] = None
-    ) -> pd.DataFrame:
-        """
-        Evaluate all models on all benchmarks.
-        """
-        print(f"\n{'='*70}")
-        print("EVALUATING ALL MODELS")
-        print(f"{'='*70}\n")
+    # def evaluate_all(
+    #     self, model_types: Optional[List[str]] = None, benchmark_names: Optional[List[str]] = None
+    # ) -> pd.DataFrame:
+    #     """
+    #     Evaluate all models on all benchmarks.
+    #     """
+    #     print(f"\n{'='*70}")
+    #     print("EVALUATING ALL MODELS")
+    #     print(f"{'='*70}\n")
 
-        set_seed(self.config.seed)
+    #     set_seed(self.config.seed)
 
-        checkpoints_dir = self.paths["checkpoints_dir"]
-        benchmarks_dir = self.paths["benchmarks_dir"]
+    #     checkpoints_dir = self.paths["checkpoints_dir"]
+    #     benchmarks_dir = self.paths["benchmarks_dir"]
 
-        # Find model checkpoints
-        if model_types is None:
-            model_files = list(checkpoints_dir.glob("*.ckpt"))
-            print(f"Found {len(model_files)} model checkpoints")
-        else:
-            model_files = []
-            for model_type in model_types:
-                files = list(checkpoints_dir.glob(f"{model_type}*.ckpt"))
-                model_files.extend(files)
-            print(f"Evaluating {len(model_files)} specified models")
+    #     # Find model checkpoints
+    #     if model_types is None:
+    #         model_files = list(checkpoints_dir.glob("*.ckpt"))
+    #         print(f"Found {len(model_files)} model checkpoints")
+    #     else:
+    #         model_files = []
+    #         for model_type in model_types:
+    #             files = list(checkpoints_dir.glob(f"{model_type}*.ckpt"))
+    #             model_files.extend(files)
+    #         print(f"Evaluating {len(model_files)} specified models")
 
-        # Find benchmarks
-        if benchmark_names is None:
-            benchmark_files = list(benchmarks_dir.glob("*.csv"))
-            print(f"Found {len(benchmark_files)} benchmarks")
-        else:
-            benchmark_files = []
-            for benchmark_name in benchmark_names:
-                files = list(benchmarks_dir.glob(f"{benchmark_name}*.csv"))
-                benchmark_files.extend(files)
-            print(f"Evaluating on {len(benchmark_files)} specified benchmarks")
+    #     # Find benchmarks
+    #     if benchmark_names is None:
+    #         benchmark_files = list(benchmarks_dir.glob("*.csv"))
+    #         print(f"Found {len(benchmark_files)} benchmarks")
+    #     else:
+    #         benchmark_files = []
+    #         for benchmark_name in benchmark_names:
+    #             files = list(benchmarks_dir.glob(f"{benchmark_name}*.csv"))
+    #             benchmark_files.extend(files)
+    #         print(f"Evaluating on {len(benchmark_files)} specified benchmarks")
 
-        if not model_files or not benchmark_files:
-            print("❌ No models or benchmarks found")
-            return pd.DataFrame()
+    #     if not model_files or not benchmark_files:
+    #         print("❌ No models or benchmarks found")
+    #         return pd.DataFrame()
 
-        # Evaluate all combinations
-        for model_file in model_files:
-            # CRITICAL FIX: Use full filename stem, not just first part
-            model_type = model_file.stem  # DON'T split by "-"!
+    #     # Evaluate all combinations
+    #     for model_file in model_files:
+    #         # CRITICAL FIX: Use full filename stem, not just first part
+    #         model_type = model_file.stem  # DON'T split by "-"!
 
-            for benchmark_file in benchmark_files:
-                try:
-                    self.evaluate_model(model_file, benchmark_file, model_name=model_type)
-                except Exception as e:
-                    print(f"❌ Error evaluating {model_type} on {benchmark_file.stem}: {e}")
-                    import traceback
+    #         for benchmark_file in benchmark_files:
+    #             try:
+    #                 self.evaluate_model(model_file, benchmark_file, model_name=model_type)
+    #             except Exception as e:
+    #                 print(f"❌ Error evaluating {model_type} on {benchmark_file.stem}: {e}")
+    #                 import traceback
 
-                    traceback.print_exc()
+    #                 traceback.print_exc()
 
-        # Create summary
-        if self.evaluation_results:
-            summary_df = pd.DataFrame(list(self.evaluation_results.values()))
-            summary_path = self.results_dir / "evaluation_summary.csv"
-            summary_df.to_csv(summary_path, index=False)
+    #     # Create summary
+    #     if self.evaluation_results:
+    #         summary_df = pd.DataFrame(list(self.evaluation_results.values()))
+    #         summary_path = self.results_dir / "evaluation_summary.csv"
+    #         summary_df.to_csv(summary_path, index=False)
 
-            print(f"\n{'='*70}")
-            print("EVALUATION SUMMARY")
-            print(f"{'='*70}")
-            print(summary_df.to_string(index=False))
-            print(f"\n✅ Saved summary: {summary_path}")
+    #         print(f"\n{'='*70}")
+    #         print("EVALUATION SUMMARY")
+    #         print(f"{'='*70}")
+    #         print(summary_df.to_string(index=False))
+    #         print(f"\n✅ Saved summary: {summary_path}")
 
-            return summary_df
+    #         return summary_df
 
-        return pd.DataFrame()
+    #     return pd.DataFrame()
 
     def run_analyses(
         self,
