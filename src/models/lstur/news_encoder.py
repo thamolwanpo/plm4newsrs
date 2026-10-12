@@ -6,7 +6,7 @@ import torch.nn.functional as F
 from transformers import AutoModel
 
 from src.embeddings import load_glove_from_file, SimpleGloVeWrapper, embed_text_with_glove
-from src.models.components import BaseNewsEncoder, CNNEncoder, AdditiveAttention
+from src.models.components import BaseNewsEncoder, CNNEncoder, AdditiveAttention, FrozenLMCache
 
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -100,10 +100,12 @@ class LSTURNewsEncoder(BaseNewsEncoder):
         self.hidden_size = self.bert.config.hidden_size
 
         # Freeze or fine-tune language model
+        self.lm_cache = None
         if not self.config.fine_tune_lm:
             print("Freezing language model parameters")
             for param in self.bert.parameters():
                 param.requires_grad = False
+            self.lm_cache = FrozenLMCache(cls_only=True)
         else:
             # Selective layer freezing: freeze all layers except the last N layers
             if hasattr(self.config, "finetune_layers") and self.config.finetune_layers > 0:
@@ -284,14 +286,18 @@ class LSTURNewsEncoder(BaseNewsEncoder):
         else:
             raise ValueError(f"Expected 2D or 3D input, got {title_input_ids.dim()}D tensor")
 
-        # Get BERT embeddings: batch_size, seq_len, hidden_size
-        title_vector = self.bert(**news_input)[0]
+        if self.lm_cache is not None and not self.store_intermediate_outputs:
+            # Frozen BERT: [CLS] vectors computed once per article
+            title_vector = self.lm_cache(self.bert, **news_input)
+        else:
+            # Get BERT embeddings: batch_size, seq_len, hidden_size
+            title_vector = self.bert(**news_input)[0]
 
-        if self.store_intermediate_outputs:
-            self._store_output("bert_embeddings", title_vector)
+            if self.store_intermediate_outputs:
+                self._store_output("bert_embeddings", title_vector)
 
-        # Extract [CLS] token: batch_size, hidden_size
-        title_vector = title_vector[:, 0]
+            # Extract [CLS] token: batch_size, hidden_size
+            title_vector = title_vector[:, 0]
 
         # Apply pooler
         title_vector = self.pooler(title_vector)
