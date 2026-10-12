@@ -1,7 +1,10 @@
-import torch
-from pathlib import Path
-from typing import Dict, Optional
+import copy
+import json
 import os
+from pathlib import Path
+from typing import Dict, List, Optional
+
+import torch
 
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer
@@ -11,6 +14,7 @@ from lightning.pytorch.loggers import TensorBoardLogger
 
 from src.data import NewsDataset
 from src.data.collate import collate_fn
+from src.data.preprocessing import build_user_map, read_model_csv
 from src.models.registry import get_model, get_model_class
 from src.utils.seed import set_seed
 
@@ -29,6 +33,7 @@ def train_model(config, device: Optional[torch.device] = None, return_trainer: b
     """
     # Set seed for reproducibility
     set_seed(config.seed)
+    _ = config.run_name  # validates model_type / poison_set
 
     # Print configuration
     config.print_config()
@@ -54,10 +59,20 @@ def train_model(config, device: Optional[torch.device] = None, return_trainer: b
         print(f"\nLoading tokenizer: {config.model_name}")
         tokenizer = AutoTokenizer.from_pretrained(config.model_name)
 
+    # LSTUR: index the users of this training set (unknown users -> 0)
+    user_map = None
+    if config.architecture == "lstur":
+        user_map = build_user_map(read_model_csv(paths["train_csv"])["user_id"])
+        map_path = user_map_path(paths["checkpoints_dir"], config.run_name)
+        with open(map_path, "w") as f:
+            json.dump(user_map, f)
+        print(f"  Saved LSTUR user map ({len(user_map)} users): {map_path}")
+        config.num_users = len(user_map) + 1  # + index 0 for unknown users
+
     # Create datasets
     print("\nCreating datasets...")
-    train_dataset = NewsDataset(paths["train_csv"], config, tokenizer)
-    val_dataset = NewsDataset(paths["val_csv"], config, tokenizer)
+    train_dataset = NewsDataset(paths["train_csv"], config, tokenizer, user_map=user_map)
+    val_dataset = NewsDataset(paths["val_csv"], config, tokenizer, user_map=user_map)
 
     # Create dataloaders
     num_workers = min(4, os.cpu_count() // 2) if os.cpu_count() else 0
@@ -88,34 +103,23 @@ def train_model(config, device: Optional[torch.device] = None, return_trainer: b
     print(f"  Train batches: {len(train_loader)}")
     print(f"  Val batches: {len(val_loader)}")
 
-    # Update config with actual number of users if using LSTUR
-    if config.architecture == "lstur":
-        if hasattr(train_dataset, "user_to_idx"):
-            actual_num_users = len(train_dataset.user_to_idx)
-            print(f"Updating config.num_users from {config.num_users} to {actual_num_users}")
-            config.num_users = actual_num_users
-        else:
-            print(
-                f"Warning: Could not determine actual number of users, using config.num_users = {config.num_users}"
-            )
-
     # Initialize model
     print("\nInitializing model...")
     # Select appropriate Lightning module based on architecture
     lit_model = get_model(config.architecture, config)
 
     # Setup logging
-    logger = TensorBoardLogger(save_dir=paths["logs_dir"], name=f"logs_{config.model_type}")
+    logger = TensorBoardLogger(save_dir=paths["logs_dir"], name=f"logs_{config.run_name}")
 
     # Setup callbacks
     checkpoint_callback = ModelCheckpoint(
         monitor="val_auc",
         dirpath=paths["checkpoints_dir"],
-        filename=f"{config.model_type}-{{epoch:02d}}-{{val_auc:.4f}}",
-        save_top_k=3,
+        filename=f"{config.run_name}-{{epoch:02d}}-{{val_auc:.4f}}",
+        save_top_k=1,
         mode="max",
         verbose=True,
-        save_last=False,  # Also save last checkpoint
+        save_last=False,
     )
 
     early_stopping = EarlyStopping(
@@ -135,7 +139,7 @@ def train_model(config, device: Optional[torch.device] = None, return_trainer: b
         callbacks=[checkpoint_callback, early_stopping],
         log_every_n_steps=10,
         enable_progress_bar=True,
-        gradient_clip_val=1.0,  # Gradient clipping for stability
+        gradient_clip_val=config.gradient_clip_val,
         deterministic=True,  # For reproducibility
     )
 
@@ -158,82 +162,84 @@ def train_model(config, device: Optional[torch.device] = None, return_trainer: b
     return checkpoint_callback.best_model_path
 
 
+def user_map_path(checkpoints_dir: Path, run_name: str) -> Path:
+    """Where the LSTUR user map of a trained model is stored."""
+    return Path(checkpoints_dir) / f"{run_name}_user_map.json"
+
+
+def get_training_runs(config) -> List[tuple]:
+    """(model_type, poison_set) pairs trained by --train-all: the clean model
+    plus one poisoned model per A set (config.poison_sets, or all found)."""
+    poison_sets = config.poison_sets or config.discover_poison_sets()
+    return [("clean", None)] + [("poisoned", a) for a in poison_sets]
+
+
 def train_all_models(config, device: Optional[torch.device] = None) -> Dict[str, str]:
     """
-    Train all model types (clean and poisoned).
+    Train the clean model and every poisoned model.
 
     Args:
-        config: Base configuration (will be modified for each model type)
+        config: Base configuration (copied for each run)
         device: Device to train on (auto-detected if None)
 
     Returns:
-        Dictionary mapping model_type to checkpoint path
+        Dictionary mapping run name to checkpoint path
     """
-    # Set seed once at the start
     set_seed(config.seed)
-
-    print("\n" + "=" * 70)
-    print("TRAINING ALL MODEL TYPES")
-    print("=" * 70)
 
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
 
-    # Define model types to train
-    model_types = ["clean", "poisoned"]
+    runs = get_training_runs(config)
+    if len(runs) == 1:
+        print(f"⚠️ No poisoned sets found in {config.data_root / 'stage4'}")
+
+    print("\n" + "=" * 70)
+    print(f"TRAINING ALL MODELS: {', '.join(p or m for m, p in runs)}")
+    print("=" * 70)
 
     trained_models = {}
     failed_models = []
 
-    for i, model_type in enumerate(model_types, 1):
+    for i, (model_type, poison_set) in enumerate(runs, 1):
+        model_config = copy.deepcopy(config)
+        model_config.model_type = model_type
+        model_config.poison_set = poison_set
+        run_name = model_config.run_name
+
         print(f"\n{'='*70}")
-        print(f"TRAINING [{i}/{len(model_types)}]: {model_type.upper()}")
+        print(f"TRAINING [{i}/{len(runs)}]: {run_name}")
         print(f"{'='*70}")
 
         try:
-            # Create a copy of config for this model type
-            import copy
-
-            model_config = copy.deepcopy(config)
-            model_config.model_type = model_type
-
-            # Update paths to reflect new model type
-            model_config.__post_init__()
-
-            # Train
             model_path = train_model(model_config, device)
 
             if model_path:
-                trained_models[model_type] = model_path
-                print(f"✅ Successfully trained {model_type}")
+                trained_models[run_name] = model_path
+                print(f"✅ Successfully trained {run_name}")
             else:
-                print(f"⚠️ Skipped {model_type} (missing data files)")
-                failed_models.append(model_type)
+                print(f"⚠️ Skipped {run_name} (missing data files)")
+                failed_models.append(run_name)
 
         except Exception as e:
-            print(f"❌ Failed to train {model_type}: {e}")
+            print(f"❌ Failed to train {run_name}: {e}")
             import traceback
 
             traceback.print_exc()
-            failed_models.append(model_type)
+            failed_models.append(run_name)
             continue
 
     # Summary
     print("\n" + "=" * 70)
     print("ALL MODELS TRAINING COMPLETE")
     print("=" * 70)
-    print(f"Successfully trained: {len(trained_models)}/{len(model_types)} models\n")
+    print(f"Successfully trained: {len(trained_models)}/{len(runs)} models\n")
 
-    for model_type, path in trained_models.items():
-        print(f"  ✅ {model_type}: {path}")
+    for run_name, path in trained_models.items():
+        print(f"  ✅ {run_name}: {path}")
 
     if failed_models:
         print(f"\n⚠️  Failed/Skipped models: {failed_models}")
-        print(f"\nNote: Make sure the following files exist in your data directory:")
-        for model_type in failed_models:
-            print(f"  - train_{model_type}.csv")
-            print(f"  - val_{model_type}.csv")
 
     return trained_models
 
@@ -269,13 +275,13 @@ def resume_training(
     paths = config.get_paths()
 
     # Setup logging
-    logger = TensorBoardLogger(save_dir=paths["logs_dir"], name=f"logs_{config.model_type}_resumed")
+    logger = TensorBoardLogger(save_dir=paths["logs_dir"], name=f"logs_{config.run_name}_resumed")
 
     # Setup callbacks
     checkpoint_callback = ModelCheckpoint(
         monitor="val_auc",
         dirpath=paths["checkpoints_dir"],
-        filename=f"{config.model_type}-resumed-{{epoch:02d}}-{{val_auc:.4f}}",
+        filename=f"{config.run_name}-resumed-{{epoch:02d}}-{{val_auc:.4f}}",
         save_top_k=1,
         mode="max",
         verbose=True,

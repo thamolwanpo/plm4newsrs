@@ -14,7 +14,7 @@ finetune_layers: 2  # Number of last layers to fine-tune (RoBERTa-base has 12 la
 
 # Architecture hyperparameters
 max_seq_length: 50
-max_history_length: 50
+max_history_length: 5  # = HISTORY_LEN in fakeun-dataprep
 
 # Multi-head self-attention (for news encoder)
 num_attention_heads: 16
@@ -34,7 +34,7 @@ early_stopping_patience: 3
 
 # Paths
 base_dir: null
-models_dir: null
+data_root: null  # fakeun-dataprep output for the dataset (default: data/problem2/{dataset})
 
 # Reproducibility
 seed: 42

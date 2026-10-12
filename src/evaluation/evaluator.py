@@ -1,39 +1,62 @@
 """Main evaluator orchestrating the evaluation pipeline."""
 
+import json
+import re
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Set, Tuple
+
 import pandas as pd
 import torch
-from pathlib import Path
-from typing import Dict, List, Optional, Any
+from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from configs import ModelConfig
+from src.data.preprocessing import load_news_items
 from src.models.registry import get_model_class
+from src.training.trainer import user_map_path
 from src.utils.seed import set_seed
 
+from .analyzers import ExposureAnalyzer, TruthDecayAnalyzer, FailureAnalyzer
 from .benchmark_dataset import BenchmarkDataset, benchmark_collate_fn
-from .analyzers import ExposureAnalyzer, TruthDecayAnalyzer, FailureAnalyzer, UnlearningAnalyzer
+from .metrics.misinformation import calculate_fake_exposure, calculate_mc_at_k
+from .metrics.ranking import query_ranking_metrics
 from .visualizer import EvaluationVisualizer
-from .metrics.ranking import (
-    calculate_auc,
-    calculate_mrr,
-    calculate_ndcg_at_k,
-    calculate_recall_at_k,
-)
 
-from joblib import Parallel, delayed
-from torch.utils.data import DataLoader
-import numpy as np
+# stage6 probe benchmarks that cover the whole poisoning pool; for a given
+# poisoned set they are also evaluated on that set's injected items only.
+POISON_PROBES = ("poison_probe", "poison_probe_realneg")
+
+# Order used in summaries (any other stage6 csv is appended alphabetically)
+BENCHMARK_ORDER = [
+    "standard",
+    "standard_clean",
+    "standard_mixed",
+    "adversarial",
+    "pattern_probe_realneg",
+    "pattern_probe",
+    "poison_probe_realneg",
+    "poison_probe",
+]
+
+CKPT_PATTERN = re.compile(r"^(?P<run>.+?)-epoch=(?P<epoch>\d+)-val_auc=(?P<auc>[0-9.]+?)(-v\d+)?$")
+
+
+def parse_run_name(run_name: str) -> Tuple[str, Optional[str]]:
+    """'clean' -> ('clean', None); 'poisoned_A_r0.5_s1' -> ('poisoned', 'A_r0.5_s1')."""
+    if run_name.startswith("poisoned_"):
+        return "poisoned", run_name[len("poisoned_") :]
+    return run_name, None
 
 
 class ModelEvaluator:
     """
-    Main evaluator for news recommendation models.
+    Evaluates trained models on the stage6 benchmarks.
 
-    Orchestrates:
-    - Model evaluation on benchmarks
-    - Multiple analysis types (exposure, truth decay, failures, unlearning)
-    - Visualization generation
-    - Results aggregation
+    - One query = one target + its negatives; metrics are averaged over queries.
+    - poison_probe*.csv cover the whole poisoning pool. They are also evaluated
+      per poisoned set, restricted to that set's injected items
+      (stage4/A_.../A_fake_items.csv), as "<benchmark>@<A set>": the clean
+      model on every poisoned set (its reference), a poisoned model on its own.
     """
 
     def __init__(
@@ -44,53 +67,45 @@ class ModelEvaluator:
         results_dir: Optional[Path] = None,
     ):
         """
-        Initialize model evaluator.
-
         Args:
             config: Model configuration
             device: Device to run on (auto-detect if None)
-            enable_analyses: List of analyses to run
-                Options: ['exposure', 'truth_decay', 'failure', 'unlearning']
-                If None, runs all applicable analyses
+            enable_analyses: Analyses to run: 'exposure', 'truth_decay', 'failure'
+                (None = all)
+            results_dir: Override results directory
         """
         self.config = config
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        # Get paths
-        if results_dir is not None:
-            self.results_dir = results_dir
-        else:
-            self.paths = config.get_paths()
-            self.results_dir = self.paths["results_dir"]
+        self.paths = config.get_paths()
+        self.results_dir = Path(results_dir) if results_dir else self.paths["results_dir"]
         self.results_dir.mkdir(parents=True, exist_ok=True)
 
-        # Initialize analyzers
         self.analyzers = self._initialize_analyzers(enable_analyses)
-
-        # Initialize visualizer
         self.visualizer = EvaluationVisualizer(self.results_dir)
 
-        # Cache for results
-        self.evaluation_results = {}
-        self.detailed_results = {}
+        # (model, benchmark) -> metrics dict / detailed results
+        self.evaluation_results: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        self.detailed_results: Dict[Tuple[str, str], pd.DataFrame] = {}
+
+        self._news_items = None
+        self._benchmark_cache: Dict[str, BenchmarkDataset] = {}
 
         print(f"\n{'='*70}")
-        print(f"MODEL EVALUATOR INITIALIZED")
+        print("MODEL EVALUATOR INITIALIZED")
         print(f"{'='*70}")
         print(f"Device: {self.device}")
+        print(f"Benchmarks: {self.paths['benchmarks_dir']}")
         print(f"Results directory: {self.results_dir}")
         print(f"Enabled analyses: {list(self.analyzers.keys())}")
         print(f"{'='*70}\n")
 
     def _initialize_analyzers(self, enable_analyses: Optional[List[str]]) -> Dict:
-        """Initialize enabled analyzers."""
         available_analyzers = {
             "exposure": ExposureAnalyzer,
             "truth_decay": TruthDecayAnalyzer,
             "failure": FailureAnalyzer,
-            "unlearning": UnlearningAnalyzer,
         }
-
         if enable_analyses is None:
             enable_analyses = list(available_analyzers.keys())
 
@@ -100,817 +115,388 @@ class ModelEvaluator:
                 analyzers[name] = available_analyzers[name](self.results_dir)
             else:
                 print(f"⚠️  Warning: Unknown analyzer '{name}' - skipping")
-
         return analyzers
 
-    def evaluate_all(
-        self, model_types: Optional[List[str]] = None, benchmark_names: Optional[List[str]] = None
-    ) -> pd.DataFrame:
-        """
-        Evaluate all models on all benchmarks with optimized loading and inference.
-        """
-        print(f"\n{'='*70}")
-        print("EVALUATING ALL MODELS (OPTIMIZED)")
-        print(f"{'='*70}\n")
+    # ------------------------------------------------------------------ #
+    # Discovery
+    # ------------------------------------------------------------------ #
+    def discover_models(self, model_names: Optional[List[str]] = None) -> Dict[str, Path]:
+        """Best checkpoint (highest val_auc in the filename) per trained model.
 
+        Args:
+            model_names: run names or prefixes to keep, e.g. ["clean",
+                "poisoned_A_r0.5_s1"] or ["poisoned"] (default: all)
+        """
+        best: Dict[str, Tuple[float, Path]] = {}
+        for path in sorted(self.paths["checkpoints_dir"].glob("*.ckpt")):
+            match = CKPT_PATTERN.match(path.stem)
+            run, auc = (match["run"], float(match["auc"])) if match else (path.stem, float("-inf"))
+            if run.endswith("-resumed"):
+                run = run[: -len("-resumed")]
+            if model_names and not any(run == m or run.startswith(m) for m in model_names):
+                continue
+            if run not in best or auc > best[run][0]:
+                best[run] = (auc, path)
+        return {run: path for run, (_, path) in sorted(best.items())}
+
+    def discover_benchmarks(self, benchmark_names: Optional[List[str]] = None) -> List[Path]:
+        """stage6 benchmark CSVs (exact names, default: all)."""
+        files = {p.stem: p for p in self.paths["benchmarks_dir"].glob("*.csv")}
+        if benchmark_names:
+            missing = [b for b in benchmark_names if b not in files]
+            if missing:
+                print(f"⚠️  Benchmarks not found: {missing} (available: {sorted(files)})")
+            names = [b for b in benchmark_names if b in files]
+        else:
+            names = [b for b in BENCHMARK_ORDER if b in files]
+            names += sorted(set(files) - set(BENCHMARK_ORDER))
+        return [files[n] for n in names]
+
+    def _injected_items(self, poison_set: str) -> Set[str]:
+        path = self.config.poison_set_dir(poison_set) / "A_fake_items.csv"
+        return set(pd.read_csv(path, dtype={"item_id": str})["item_id"])
+
+    def benchmark_plan(
+        self, run_name: str, benchmark_files: List[Path]
+    ) -> List[Tuple[str, Path, Optional[str]]]:
+        """(benchmark name, csv, poisoned set to filter targets by) for one model."""
+        model_type, own_set = parse_run_name(run_name)
+        if model_type == "clean":
+            filter_sets = self.config.poison_sets or self.config.discover_poison_sets()
+        else:
+            filter_sets = [own_set]
+
+        plan = []
+        for path in benchmark_files:
+            plan.append((path.stem, path, None))
+            if path.stem in POISON_PROBES:
+                for a_set in filter_sets:
+                    if (self.config.poison_set_dir(a_set) / "A_fake_items.csv").exists():
+                        plan.append((f"{path.stem}@{a_set}", path, a_set))
+        return plan
+
+    # ------------------------------------------------------------------ #
+    # Evaluation
+    # ------------------------------------------------------------------ #
+    def evaluate_all(
+        self, model_names: Optional[List[str]] = None, benchmark_names: Optional[List[str]] = None
+    ) -> pd.DataFrame:
+        """Evaluate the best checkpoint of every trained model on every benchmark."""
         set_seed(self.config.seed)
 
-        checkpoints_dir = self.paths["checkpoints_dir"]
-        benchmarks_dir = self.paths["benchmarks_dir"]
-
-        # 1. Discovery Phase
-        if model_types is None:
-            model_files = list(checkpoints_dir.glob("*.ckpt"))
-        else:
-            model_files = []
-            for model_type in model_types:
-                model_files.extend(list(checkpoints_dir.glob(f"{model_type}*.ckpt")))
-
-        if benchmark_names is None:
-            benchmark_files = list(benchmarks_dir.glob("*.csv"))
-        else:
-            benchmark_files = []
-            for benchmark_name in benchmark_names:
-                benchmark_files.extend(list(benchmarks_dir.glob(f"{benchmark_name}*.csv")))
-
-        if not model_files or not benchmark_files:
-            print("❌ No models or benchmarks found")
+        models = self.discover_models(model_names)
+        benchmark_files = self.discover_benchmarks(benchmark_names)
+        if not models or not benchmark_files:
+            print(f"❌ No models ({self.paths['checkpoints_dir']}) or "
+                  f"benchmarks ({self.paths['benchmarks_dir']}) found")
             return pd.DataFrame()
 
-        print(f"Found {len(model_files)} models and {len(benchmark_files)} benchmarks.")
+        print(f"Found {len(models)} models and {len(benchmark_files)} benchmarks.")
+        for run_name, model_path in models.items():
+            print(f"  - {run_name}: {model_path.name}")
 
-        # 2. Outer Loop: Iterate Models (Load Once)
-        for model_path in model_files:
-            model_name = model_path.stem
-            print(f"\n🔄 Loading Model: {model_name}")
-
+        for run_name, model_path in models.items():
             try:
-                # --- OPTIMIZATION: Load Tokenizer & Model ONCE per checkpoint ---
-
-                # A. Load Tokenizer
-                use_glove = "glove" in self.config.model_name.lower()
-                if use_glove:
-                    tokenizer = None
-                else:
-                    from transformers import AutoTokenizer
-
-                    tokenizer = AutoTokenizer.from_pretrained(self.config.model_name)
-
-                # B. Load Model
-                model_class = get_model_class(self.config.architecture)
-                model = model_class.load_from_checkpoint(str(model_path), weights_only=False)
-                model.to(self.device)
-                model.eval()
-
-                # 3. Inner Loop: Iterate Benchmarks (Reuse Model)
-                for benchmark_path in benchmark_files:
-                    try:
-                        # Pass pre-loaded model and tokenizer to avoid reloading
-                        self.evaluate_model(
-                            model_path=model_path,
-                            benchmark_path=benchmark_path,
-                            model_name=model_name,
-                            preloaded_model=model,  # NEW ARGUMENT
-                            preloaded_tokenizer=tokenizer,  # NEW ARGUMENT
-                        )
-                    except Exception as e:
-                        print(f"❌ Error evaluating {model_name} on {benchmark_path.stem}: {e}")
-                        import traceback
-
-                        traceback.print_exc()
-
-                # Cleanup to free GPU memory before next model
-                del model
-                torch.cuda.empty_cache()
-
+                self.evaluate_checkpoint(model_path, run_name, benchmark_files)
             except Exception as e:
-                print(f"❌ Critical error loading model {model_name}: {e}")
-                continue
+                print(f"❌ Error evaluating model {run_name}: {e}")
+                import traceback
 
-        # 4. Summary Generation
-        if self.evaluation_results:
-            summary_df = pd.DataFrame(list(self.evaluation_results.values()))
-            summary_path = self.results_dir / "evaluation_summary.csv"
-            summary_df.to_csv(summary_path, index=False)
-            return summary_df
+                traceback.print_exc()
 
-        return pd.DataFrame()
+        return self.save_summary()
 
-    def evaluate_model(
-        self,
-        model_path: Path,
-        benchmark_path: Path,
-        model_name: Optional[str] = None,
-        preloaded_model: Optional[Any] = None,  # NEW
-        preloaded_tokenizer: Optional[Any] = None,  # NEW
-    ) -> Dict[str, Any]:
-        """
-        Evaluate a single model. Accepts preloaded artifacts to speed up loops.
-        """
-        if model_name is None:
-            model_name = model_path.stem
-        benchmark_name = benchmark_path.stem
+    def evaluate_checkpoint(
+        self, model_path: Path, run_name: Optional[str], benchmark_files: List[Path]
+    ):
+        """Load one checkpoint and evaluate it on its benchmark plan."""
+        model_path = Path(model_path)
+        if run_name is None:
+            match = CKPT_PATTERN.match(model_path.stem)
+            run_name = match["run"] if match else model_path.stem
+        print(f"\n🔄 Loading model: {run_name} ({model_path.name})")
 
-        print(f"   📍 Benchmark: {benchmark_name}")
-
-        # 1. Use preloaded artifacts or load them now
-        if preloaded_model is None:
-            # Legacy fallback: Load model if not provided
-            model_class = get_model_class(self.config.architecture)
-            model = model_class.load_from_checkpoint(str(model_path), weights_only=False)
-            model.to(self.device)
-            model.eval()
-        else:
-            model = preloaded_model
-
-        if preloaded_tokenizer is None and "glove" not in self.config.model_name.lower():
+        tokenizer = None
+        if "glove" not in self.config.model_name.lower():
             from transformers import AutoTokenizer
 
             tokenizer = AutoTokenizer.from_pretrained(self.config.model_name)
-        else:
-            tokenizer = preloaded_tokenizer
 
-        # 2. Create Dataset/Loader
-        benchmark_dataset = BenchmarkDataset(benchmark_path, tokenizer, self.config)
-        benchmark_loader = DataLoader(
-            benchmark_dataset,
+        model_class = get_model_class(self.config.architecture)
+        model = model_class.load_from_checkpoint(str(model_path), weights_only=False)
+        model.to(self.device)
+        model.eval()
+
+        user_map = None
+        if self.config.architecture == "lstur":
+            map_path = user_map_path(model_path.parent, run_name)
+            with open(map_path) as f:
+                user_map = json.load(f)
+
+        for bench_name, bench_path, filter_set in self.benchmark_plan(run_name, benchmark_files):
+            try:
+                self.evaluate_benchmark(
+                    model, tokenizer, run_name, bench_name, bench_path, filter_set, user_map
+                )
+            except Exception as e:
+                print(f"❌ Error evaluating {run_name} on {bench_name}: {e}")
+                import traceback
+
+                traceback.print_exc()
+
+        del model
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    def _get_benchmark(self, bench_name, bench_path, filter_set, tokenizer, user_map):
+        """Benchmark datasets don't depend on the model, so build each once."""
+        if bench_name not in self._benchmark_cache:
+            if self._news_items is None:
+                self._news_items = load_news_items(self.config.news_items_path)
+            target_filter = self._injected_items(filter_set) if filter_set else None
+            self._benchmark_cache[bench_name] = BenchmarkDataset(
+                bench_path,
+                tokenizer,
+                self.config,
+                user_map=user_map,
+                target_filter=target_filter,
+                news_items=self._news_items,
+            )
+        dataset = self._benchmark_cache[bench_name]
+        dataset.user_to_idx = user_map
+        return dataset
+
+    def evaluate_benchmark(
+        self, model, tokenizer, run_name, bench_name, bench_path, filter_set=None, user_map=None
+    ) -> Dict[str, Any]:
+        print(f"   📍 Benchmark: {bench_name}")
+        dataset = self._get_benchmark(bench_name, bench_path, filter_set, tokenizer, user_map)
+        if len(dataset) == 0:
+            print("      (no queries - skipped)")
+            return {}
+
+        loader = DataLoader(
+            dataset,
             batch_size=self.config.val_batch_size,
             shuffle=False,
             collate_fn=benchmark_collate_fn,
-            num_workers=8,  # Reduced workers to avoid overhead on small benchmarks
-            pin_memory=True,
+            num_workers=0,
         )
+        detailed = self._run_inference(model, loader)
+        metrics = self._calculate_metrics(detailed)
 
-        # 3. Run Inference (Optimized)
-        detailed_results = self._run_inference(model, benchmark_loader)
+        model_type, poison_set = parse_run_name(run_name)
+        key = (run_name, bench_name)
+        self.evaluation_results[key] = {
+            "model": run_name,
+            "model_type": model_type,
+            "poison_set": poison_set,
+            "benchmark": bench_name,
+            **metrics,
+        }
+        self.detailed_results[key] = detailed
 
-        # 4. Calculate Metrics (Parallelized)
-        metrics = self._calculate_metrics(detailed_results)
-
-        # 5. Save Results (Using Parquet for speed)
-        key = f"{model_name}_{benchmark_name}"
-        self.evaluation_results[key] = {"model": model_name, "benchmark": benchmark_name, **metrics}
-        self.detailed_results[key] = detailed_results
-
-        # OPTIMIZATION: Use Parquet instead of CSV for large result files
-        detailed_path = self.results_dir / f"{key}_detailed.parquet"
-        detailed_results.to_parquet(detailed_path, index=False)
-
-        return {"metrics": metrics, "detailed_results": detailed_results}
+        safe_name = bench_name.replace("@", "__")
+        detailed.to_parquet(
+            self.results_dir / f"{run_name}__{safe_name}_detailed.parquet", index=False
+        )
+        print(
+            f"      queries={metrics['n_queries']}  AUC={metrics['AUC']:.4f}  "
+            f"MRR={metrics['MRR']:.4f}  NDCG@10={metrics['NDCG@10']:.4f}"
+        )
+        return metrics
 
     def _run_inference(self, model, dataloader) -> pd.DataFrame:
-        """
-        Optimized inference using vectorized collection and inference_mode.
-        """
-        # Pre-allocate lists for columnar construction (approx 10x faster than row-append)
-        columns = {
-            "user_id": [],
-            "news_id": [],
-            "title": [],
-            "score": [],
-            "label": [],
-            "is_fake": [],
-        }
-
+        """Score every candidate; padded candidates are masked out."""
+        columns = {k: [] for k in ("query_id", "user_id", "news_id", "score", "label", "is_fake")}
         use_amp = self.device.type == "cuda"
 
-        with torch.inference_mode():  # Faster than no_grad
+        with torch.inference_mode():
             for batch in tqdm(dataloader, desc="Inference", leave=False):
                 if batch is None:
                     continue
 
-                # Move tensors to device
                 batch_tensors = {
                     k: v.to(self.device) if isinstance(v, torch.Tensor) else v
                     for k, v in batch.items()
                 }
-
-                # Mixed Precision Inference
                 with torch.amp.autocast(device_type=self.device.type, enabled=use_amp):
                     scores = model(batch_tensors)
 
-                scores = torch.softmax(scores, dim=1).cpu().numpy()
+                scores = scores.float()
+                n_cand = batch_tensors["num_candidates"]
+                pad_mask = torch.arange(scores.size(1), device=scores.device)[None, :] >= n_cand[
+                    :, None
+                ]
+                scores = torch.softmax(scores.masked_fill(pad_mask, float("-inf")), dim=1)
+                scores = scores.cpu().numpy()
 
-                # Vectorized data flattening
-                batch_size = len(batch["user_id"])
-                for i in range(batch_size):
-                    impression = batch["impression_data"][i]
-                    # Unpack impression tuples: (news_id, title, label, is_fake)
-                    news_ids, titles, labels, is_fakes = zip(*impression)
-
+                for i, impression in enumerate(batch["impression_data"]):
+                    news_ids, _, labels, is_fakes = zip(*impression)
                     n_items = len(news_ids)
+                    columns["query_id"].extend([batch["query_id"][i]] * n_items)
                     columns["user_id"].extend([batch["user_id"][i]] * n_items)
                     columns["news_id"].extend(news_ids)
-                    columns["title"].extend(titles)
                     columns["score"].extend(scores[i][:n_items])
                     columns["label"].extend(labels)
-                    columns["is_fake"].extend([int(x) for x in is_fakes])
+                    columns["is_fake"].extend(is_fakes)
 
         df = pd.DataFrame(columns)
-
-        # ---------------------------------------------------------
-        # 🔴 CRITICAL FIX: Enforce Numeric Types for 'nlargest'
-        # ---------------------------------------------------------
         df["score"] = df["score"].astype(float)
         df["label"] = df["label"].astype(int)
         df["is_fake"] = df["is_fake"].astype(int)
-
         return df
 
-    # def evaluate_model(
-    #     self, model_path: Path, benchmark_path: Path, model_name: Optional[str] = None
-    # ) -> Dict[str, Any]:
-    #     """
-    #     Evaluate a single model on a benchmark.
-
-    #     Args:
-    #         model_path: Path to model checkpoint
-    #         benchmark_path: Path to benchmark CSV
-    #         model_name: Name for results (defaults to model filename)
-
-    #     Returns:
-    #         Dictionary with evaluation metrics and detailed results
-    #     """
-    #     if model_name is None:
-    #         model_name = model_path.stem
-
-    #     benchmark_name = benchmark_path.stem
-
-    #     print(f"\n{'='*70}")
-    #     print(f"EVALUATING: {model_name} on {benchmark_name}")
-    #     print(f"{'='*70}")
-
-    #     # Load tokenizer
-    #     use_glove = "glove" in self.config.model_name.lower()
-
-    #     if use_glove:
-    #         print("Using GloVe - no tokenizer needed")
-    #         tokenizer = None
-    #     else:
-    #         from transformers import AutoTokenizer
-
-    #         print(f"Loading tokenizer: {self.config.model_name}")
-    #         tokenizer = AutoTokenizer.from_pretrained(self.config.model_name)
-
-    #     # Load model
-    #     print(f"Loading model from: {model_path}")
-    #     model = get_model_class(self.config.architecture).load_from_checkpoint(
-    #         str(model_path), weights_only=False
-    #     )
-    #     model.to(self.device)
-    #     model.eval()
-
-    #     # Create dataset and dataloader
-    #     print(f"Loading benchmark: {benchmark_path}")
-    #     benchmark_dataset = BenchmarkDataset(benchmark_path, tokenizer, self.config)
-
-    #     from torch.utils.data import DataLoader
-
-    #     benchmark_loader = DataLoader(
-    #         benchmark_dataset,
-    #         batch_size=self.config.val_batch_size,
-    #         shuffle=False,
-    #         collate_fn=benchmark_collate_fn,
-    #         num_workers=16,
-    #     )
-
-    #     # Run inference
-    #     print("Running inference...")
-    #     detailed_results = self._run_inference(model, benchmark_loader)
-
-    #     # Calculate metrics
-    #     print("Calculating metrics...")
-    #     metrics = self._calculate_metrics(detailed_results)
-
-    #     # Store results
-    #     key = f"{model_name}_{benchmark_name}"
-    #     self.evaluation_results[key] = {"model": model_name, "benchmark": benchmark_name, **metrics}
-    #     self.detailed_results[key] = detailed_results
-
-    #     # Save detailed results
-    #     detailed_path = self.results_dir / f"{key}_detailed.csv"
-    #     detailed_results.to_csv(detailed_path, index=False)
-    #     print(f"✅ Saved detailed results: {detailed_path.name}")
-
-    #     print(f"\n{'='*70}")
-    #     print(f"EVALUATION RESULTS: {model_name} on {benchmark_name}")
-    #     print(f"{'='*70}")
-    #     for metric, value in metrics.items():
-    #         print(f"  {metric}: {value:.4f}")
-    #     print(f"{'='*70}\n")
-
-    #     return {
-    #         "model": model_name,
-    #         "benchmark": benchmark_name,
-    #         "metrics": metrics,
-    #         "detailed_results": detailed_results,
-    #     }
-
-    # def _run_inference(self, model, dataloader) -> pd.DataFrame:
-    #     """
-    #     Run inference and collect results.
-
-    #     Args:
-    #         model: Trained model
-    #         dataloader: Benchmark dataloader
-
-    #     Returns:
-    #         DataFrame with predictions and labels
-    #     """
-    #     unrolled_rows = []
-
-    #     with torch.no_grad():
-    #         for batch in tqdm(dataloader, desc="Inference"):
-    #             if batch is None:
-    #                 continue
-
-    #             # Move device indicator to correct device if using GloVe
-    #             if "device_indicator" in batch:
-    #                 batch["device_indicator"] = batch["device_indicator"].to(self.device)
-
-    #             # Move tensors to device
-    #             batch_tensors = {}
-    #             for k, v in batch.items():
-    #                 if isinstance(v, torch.Tensor):
-    #                     batch_tensors[k] = v.to(self.device)
-    #                 else:
-    #                     batch_tensors[k] = v
-
-    #             # Get scores
-    #             scores = model(batch_tensors)
-    #             scores = torch.softmax(scores, dim=1).cpu().numpy()
-
-    #             # Unroll results
-    #             for i in range(len(batch["user_id"])):
-    #                 user_id = batch["user_id"][i]
-    #                 impression = batch["impression_data"][i]
-
-    #                 for j, (news_id, title, label, is_fake) in enumerate(impression):
-    #                     unrolled_rows.append(
-    #                         {
-    #                             "user_id": user_id,
-    #                             "news_id": news_id,
-    #                             "title": title,  # Add title for reference
-    #                             "score": scores[i][j],
-    #                             "label": label,
-    #                             "is_fake": int(
-    #                                 is_fake
-    #                             ),  # CRITICAL: Ensure is_fake is included as int
-    #                         }
-    #                     )
-
-    #     return pd.DataFrame(unrolled_rows)
-
     def _calculate_metrics(self, results_df: pd.DataFrame) -> Dict[str, float]:
+        """Ranking metrics of the target + fake exposure, averaged over queries.
+
+        For standard*, a higher target rank is better. For adversarial and the
+        probes the target is fake, so a LOWER target rank (lower AUC / MRR /
+        HR@k) means the model pushes that fake news less.
         """
-        Calculate evaluation metrics.
-
-        Args:
-            results_df: Detailed results
-
-        Returns:
-            Dictionary of metrics
-        """
-        from .metrics.misinformation import calculate_mc_at_k, calculate_fake_exposure
-
-        # AUC
-        auc = calculate_auc(results_df)
-
-        # Per-user metrics
-        mrr_scores = []
-        ndcg_5_scores = []
-        ndcg_10_scores = []
-        recall_5_scores = []
-        recall_10_scores = []
-
-        for user_id, group in results_df.groupby("user_id"):
-            mrr_scores.append(calculate_mrr(group))
-            ndcg_5_scores.append(calculate_ndcg_at_k(group, k=5))
-            ndcg_10_scores.append(calculate_ndcg_at_k(group, k=10))
-            recall_5_scores.append(calculate_recall_at_k(group, k=5))
-            recall_10_scores.append(calculate_recall_at_k(group, k=10))
-
-        # Misinformation metrics
-        mc_5 = calculate_mc_at_k(results_df, k=5)
-        mc_10 = calculate_mc_at_k(results_df, k=10)
-        mc_20 = calculate_mc_at_k(results_df, k=20)
-
-        exposure_10 = calculate_fake_exposure(results_df, k=10)
-        exposure_20 = calculate_fake_exposure(results_df, k=20)
-
-        return {
-            "AUC": auc,
-            "MRR": sum(mrr_scores) / len(mrr_scores) if mrr_scores else 0.0,
-            "NDCG@5": sum(ndcg_5_scores) / len(ndcg_5_scores) if ndcg_5_scores else 0.0,
-            "NDCG@10": sum(ndcg_10_scores) / len(ndcg_10_scores) if ndcg_10_scores else 0.0,
-            "Recall@5": sum(recall_5_scores) / len(recall_5_scores) if recall_5_scores else 0.0,
-            "Recall@10": sum(recall_10_scores) / len(recall_10_scores) if recall_10_scores else 0.0,
-            "MC@5": mc_5,
-            "MC@10": mc_10,
-            "MC@20": mc_20,
-            "avg_fake_in_top_10": exposure_10["avg_fake_count"],
-            "avg_fake_in_top_20": exposure_20["avg_fake_count"],
-            "users_with_fake_pct_top_10": exposure_10["users_with_fake_pct"],
-            "users_with_fake_pct_top_20": exposure_20["users_with_fake_pct"],
-            "avg_fake_ratio_top_10": exposure_10["avg_fake_ratio"],
-            "avg_fake_ratio_top_20": exposure_20["avg_fake_ratio"],
+        per_query = query_ranking_metrics(results_df, ks=(5, 10))
+        metrics = {
+            "n_queries": int(len(per_query)),
+            "n_users": int(results_df["user_id"].nunique()),
+            "avg_candidates": float(per_query["n_candidates"].mean()),
+            "AUC": float(per_query["AUC"].mean()),
+            "MRR": float(per_query["MRR"].mean()),
+            "NDCG@5": float(per_query["NDCG@5"].mean()),
+            "NDCG@10": float(per_query["NDCG@10"].mean()),
+            "HR@5": float(per_query["HR@5"].mean()),
+            "HR@10": float(per_query["HR@10"].mean()),
+            "mean_rank": float(per_query["rank"].mean()),
+            "mean_percentile": float(per_query["percentile"].mean()),
         }
 
-    # def evaluate_all(
-    #     self, model_types: Optional[List[str]] = None, benchmark_names: Optional[List[str]] = None
-    # ) -> pd.DataFrame:
-    #     """
-    #     Evaluate all models on all benchmarks.
-    #     """
-    #     print(f"\n{'='*70}")
-    #     print("EVALUATING ALL MODELS")
-    #     print(f"{'='*70}\n")
+        # Fake exposure among the top-k of each query (ignores the target's label)
+        for k in (5, 10, 20):
+            metrics[f"MC@{k}"] = calculate_mc_at_k(results_df, k=k, group_by="query_id")
+        for k in (10, 20):
+            exposure = calculate_fake_exposure(results_df, k=k, group_by="query_id")
+            metrics[f"avg_fake_in_top_{k}"] = exposure["avg_fake_count"]
+            metrics[f"queries_with_fake_pct_top_{k}"] = exposure["users_with_fake_pct"]
+        return metrics
 
-    #     set_seed(self.config.seed)
+    def save_summary(self) -> pd.DataFrame:
+        """Write evaluation_summary.csv (one row per model x benchmark)."""
+        if not self.evaluation_results:
+            return pd.DataFrame()
+        summary_df = pd.DataFrame(list(self.evaluation_results.values()))
+        summary_path = self.results_dir / "evaluation_summary.csv"
+        summary_df.to_csv(summary_path, index=False)
+        print(f"\n✅ Saved summary: {summary_path}")
+        return summary_df
 
-    #     checkpoints_dir = self.paths["checkpoints_dir"]
-    #     benchmarks_dir = self.paths["benchmarks_dir"]
-
-    #     # Find model checkpoints
-    #     if model_types is None:
-    #         model_files = list(checkpoints_dir.glob("*.ckpt"))
-    #         print(f"Found {len(model_files)} model checkpoints")
-    #     else:
-    #         model_files = []
-    #         for model_type in model_types:
-    #             files = list(checkpoints_dir.glob(f"{model_type}*.ckpt"))
-    #             model_files.extend(files)
-    #         print(f"Evaluating {len(model_files)} specified models")
-
-    #     # Find benchmarks
-    #     if benchmark_names is None:
-    #         benchmark_files = list(benchmarks_dir.glob("*.csv"))
-    #         print(f"Found {len(benchmark_files)} benchmarks")
-    #     else:
-    #         benchmark_files = []
-    #         for benchmark_name in benchmark_names:
-    #             files = list(benchmarks_dir.glob(f"{benchmark_name}*.csv"))
-    #             benchmark_files.extend(files)
-    #         print(f"Evaluating on {len(benchmark_files)} specified benchmarks")
-
-    #     if not model_files or not benchmark_files:
-    #         print("❌ No models or benchmarks found")
-    #         return pd.DataFrame()
-
-    #     # Evaluate all combinations
-    #     for model_file in model_files:
-    #         # CRITICAL FIX: Use full filename stem, not just first part
-    #         model_type = model_file.stem  # DON'T split by "-"!
-
-    #         for benchmark_file in benchmark_files:
-    #             try:
-    #                 self.evaluate_model(model_file, benchmark_file, model_name=model_type)
-    #             except Exception as e:
-    #                 print(f"❌ Error evaluating {model_type} on {benchmark_file.stem}: {e}")
-    #                 import traceback
-
-    #                 traceback.print_exc()
-
-    #     # Create summary
-    #     if self.evaluation_results:
-    #         summary_df = pd.DataFrame(list(self.evaluation_results.values()))
-    #         summary_path = self.results_dir / "evaluation_summary.csv"
-    #         summary_df.to_csv(summary_path, index=False)
-
-    #         print(f"\n{'='*70}")
-    #         print("EVALUATION SUMMARY")
-    #         print(f"{'='*70}")
-    #         print(summary_df.to_string(index=False))
-    #         print(f"\n✅ Saved summary: {summary_path}")
-
-    #         return summary_df
-
-    #     return pd.DataFrame()
-
+    # ------------------------------------------------------------------ #
+    # Analyses
+    # ------------------------------------------------------------------ #
     def run_analyses(
         self,
-        model_types: Optional[List[str]] = None,
-        benchmark_filter: str = "mixed",
+        model_names: Optional[List[str]] = None,
+        benchmark: str = "standard",
         top_k: int = 10,
     ) -> Dict[str, Any]:
         """
-        Run all enabled analyses on evaluation results.
+        Run the enabled analyzers on one benchmark for every evaluated model.
 
         Args:
-            model_types: List of model types to analyze (default: all)
-            benchmark_filter: Filter benchmarks by name (default: "mixed")
+            model_names: run names or prefixes to include (default: all)
+            benchmark: exact benchmark name (default: "standard")
             top_k: Top-k for exposure analysis
-
-        Returns:
-            Dictionary with all analysis results
         """
         print(f"\n{'='*70}")
-        print("RUNNING ANALYSES")
+        print(f"RUNNING ANALYSES on {benchmark}")
         print(f"{'='*70}\n")
 
-        # Filter results by benchmark
-        filtered_results = {k: v for k, v in self.detailed_results.items() if benchmark_filter in k}
-
-        if not filtered_results:
-            print(f"❌ No results found for benchmark filter: {benchmark_filter}")
-            return {}
-
-        # Group by model type - IMPROVED: Extract full model name properly
-        model_results = {}
-        for key, results_df in filtered_results.items():
-            # Key format: "model_name_benchmark_name"
-            # Extract model name by removing the benchmark suffix
-            if f"_{benchmark_filter}" in key:
-                # Split by benchmark name and take the first part
-                model_name = key.split(f"_{benchmark_filter}")[0]
-            else:
-                # Fallback: assume last underscore-separated part is benchmark
-                parts = key.split("_")
-                model_name = "_".join(parts[:-1]) if len(parts) > 1 else parts[0]
-
-            # Filter by model_types if specified
-            if model_types is None or any(model_name.startswith(mt) for mt in model_types):
-                model_results[model_name] = results_df
-
-        # Debug output
-        print(f"DEBUG: Extracted model names from results:")
-        for model_name in sorted(model_results.keys()):
-            print(f"  - {model_name}")
-        print()
-
+        # Analyzers group impressions by "user_id"; give them one group per
+        # query (users appear in several queries of the same benchmark).
+        model_results = {
+            model: df.drop(columns="user_id").rename(columns={"query_id": "user_id"})
+            for (model, bench), df in self.detailed_results.items()
+            if bench == benchmark
+            and (not model_names or any(model.startswith(m) for m in model_names))
+        }
         if not model_results:
-            print(f"❌ No models found after filtering")
+            print(f"❌ No results found for benchmark: {benchmark}")
             return {}
 
-        print(f"Analyzing {len(model_results)} models")
-
+        print(f"Analyzing {len(model_results)} models: {sorted(model_results)}")
         analysis_results = {}
 
-        # Run each enabled analyzer and save results for EACH model
         for analyzer_name, analyzer in self.analyzers.items():
             print(f"\n{'─'*70}")
             print(f"Running {analyzer_name} analysis...")
             print(f"{'─'*70}")
 
             try:
-                if analyzer_name == "unlearning":
-                    # Unlearning needs clean, poisoned, and multiple unlearned models
+                analyzer_summary_data = []
 
-                    # Find clean and poisoned models
-                    clean_results = None
-                    poisoned_results = None
+                for model_name, results_df in model_results.items():
+                    print(f"\n  Analyzing {model_name}...")
+                    results = analyzer.run(results_df, save=False, top_k=top_k)
+                    analysis_results[f"{analyzer_name}_{model_name}"] = results
 
-                    for model_name, results_df in model_results.items():
-                        if model_name == "clean":
-                            clean_results = results_df
-                        elif model_name == "poisoned":
-                            poisoned_results = results_df
-
-                    if clean_results is None or poisoned_results is None:
-                        print("⚠️  Skipping unlearning analysis - need clean and poisoned models")
-                        missing = []
-                        if clean_results is None:
-                            missing.append("clean")
-                        if poisoned_results is None:
-                            missing.append("poisoned")
-                        print(f"   Missing: {', '.join(missing)}")
-                        continue
-
-                    # Find ALL unlearned models - any model starting with "unlearned"
-                    unlearned_models = {
-                        model_name: results_df
-                        for model_name, results_df in model_results.items()
-                        if model_name.startswith("unlearned")
-                    }
-
-                    if not unlearned_models:
-                        print("⚠️  No unlearned models found - skipping unlearning analysis")
-                        print(f"   Available models: {list(model_results.keys())}")
-                        continue
-
-                    print(f"\n✅ Found {len(unlearned_models)} unlearned model(s):")
-                    for idx, model_name in enumerate(sorted(unlearned_models.keys()), 1):
-                        print(f"   {idx}. {model_name}")
-                    print()
-
-                    # Run analysis for EACH unlearned model
-                    unlearning_results = {}
-                    for unlearned_name, unlearned_df in unlearned_models.items():
-                        print(f"\n{'  '*2}{'─'*66}")
-                        print(f"{'  '*2}Analyzing: {unlearned_name}")
-                        print(f"{'  '*2}{'─'*66}")
-
-                        results = analyzer.analyze(
-                            clean_results=clean_results,
-                            poisoned_results=poisoned_results,
-                            unlearned_results=unlearned_df,
-                            unlearned_name=unlearned_name,
-                            top_k=top_k,
-                        )
-                        unlearning_results[unlearned_name] = results
-
-                        # Save results for this specific model
-                        analyzer.save_results(results, unlearned_name=unlearned_name)
-
-                        # Print quick summary
-                        if results.get("has_unlearned"):
-                            eff = results["effectiveness"]
-                            print(f"{'  '*2}  → Recovery rate: {eff['recovery_rate']:.1f}%")
-                            print(f"{'  '*2}  → Status: {eff['status']}")
-                            print(f"{'  '*2}  → Gap from clean: {eff['gap_from_clean']:.4f}")
-
-                    analysis_results[analyzer_name] = unlearning_results
-
-                    # Create summary CSV for all unlearned models
-                    print(f"\n{'  '*2}Creating summary for all unlearned models...")
-                    if unlearning_results:
-                        summary_data = []
-                        for unlearned_name, results in unlearning_results.items():
-                            if results.get("has_unlearned"):
-                                eff = results["effectiveness"]
-
-                                # Extract ratio and trial from model name if available
-                                ratio = None
-                                trial = None
-                                method = None
-
-                                # Parse name like: unlearned-first_order-ratio-0.050-trial-0
-                                if "-ratio-" in unlearned_name:
-                                    try:
-                                        ratio_part = unlearned_name.split("-ratio-")[1].split("-")[
-                                            0
-                                        ]
-                                        ratio = float(ratio_part)
-                                    except:
-                                        pass
-
-                                if "-trial-" in unlearned_name:
-                                    try:
-                                        trial_part = unlearned_name.split("-trial-")[1].split("-")[
-                                            0
-                                        ]
-                                        trial = int(trial_part)
-                                    except:
-                                        pass
-
-                                if "unlearned-" in unlearned_name:
-                                    try:
-                                        method = unlearned_name.split("unlearned-")[1].split("-")[0]
-                                    except:
-                                        pass
-
-                                summary_data.append(
-                                    {
-                                        "model": unlearned_name,
-                                        "method": method,
-                                        "ratio": ratio,
-                                        "trial": trial,
-                                        "status": eff["status"],
-                                        "recovery_rate": eff["recovery_rate"],
-                                        "gap_from_clean": eff["gap_from_clean"],
-                                        "is_effective": eff["is_effective"],
-                                        "clean_exposure": eff["clean_fake_count"],
-                                        "poisoned_exposure": eff["poisoned_fake_count"],
-                                        "unlearned_exposure": eff["unlearned_fake_count"],
-                                    }
-                                )
-
-                        if summary_data:
-                            summary_df = pd.DataFrame(summary_data)
-
-                            # Sort by method, ratio, trial for better readability
-                            sort_cols = []
-                            if (
-                                "method" in summary_df.columns
-                                and summary_df["method"].notna().any()
-                            ):
-                                sort_cols.append("method")
-                            if "ratio" in summary_df.columns and summary_df["ratio"].notna().any():
-                                sort_cols.append("ratio")
-                            if "trial" in summary_df.columns and summary_df["trial"].notna().any():
-                                sort_cols.append("trial")
-
-                            if sort_cols:
-                                summary_df = summary_df.sort_values(sort_cols)
-
-                            summary_path = self.results_dir / "unlearning_summary_all_models.csv"
-                            summary_df.to_csv(summary_path, index=False)
-                            print(f"{'  '*2}✅ Saved summary: {summary_path.name}")
-
-                            # Print summary table
-                            print(f"\n{'  '*2}{'='*66}")
-                            print(f"{'  '*2}SUMMARY: All Unlearned Models")
-                            print(f"{'  '*2}{'='*66}")
-                            print(f"{'  '*2}{'Model':<35} {'Recovery':<10} {'Status':<15}")
-                            print(f"{'  '*2}{'-'*66}")
-                            for _, row in summary_df.iterrows():
-                                model_short = (
-                                    row["model"][:33] + ".."
-                                    if len(row["model"]) > 35
-                                    else row["model"]
-                                )
-                                print(
-                                    f"{'  '*2}{model_short:<35} {row['recovery_rate']:>6.1f}%    {row['status']:<15}"
-                                )
-                            print(f"{'  '*2}{'='*66}")
-
-                    # Create comparison visualization for all unlearned models
-                    print(f"\n{'  '*2}Creating comparison visualization...")
-                    self.visualizer.plot_unlearning_comparison(
-                        clean_results=clean_results,
-                        poisoned_results=poisoned_results,
-                        unlearned_results=unlearned_models,
-                        top_k=top_k,
-                    )
-
-                else:
-                    # Other analyses run on each model
-                    analyzer_summary_data = []
-
-                    for model_name, results_df in model_results.items():
-                        print(f"\n  Analyzing {model_name}...")
-                        results = analyzer.run(results_df, top_k=top_k)
-                        analysis_results[f"{analyzer_name}_{model_name}"] = results
-
-                        # Collect summary data for this model
-                        model_summary = {"model": model_name}
-
-                        if analyzer_name == "exposure":
-                            model_summary.update(
-                                {
-                                    "avg_fake_in_top_k": results["exposure"]["avg_fake_count"],
-                                    "max_fake_in_top_k": results["exposure"]["max_fake_count"],
-                                    "users_with_fake_pct": results["exposure"][
-                                        "users_with_fake_pct"
-                                    ],
-                                    "avg_fake_ratio": results["exposure"]["avg_fake_ratio"],
-                                    "MC@10": results["mc_metrics"].get("MC@10", 0.0),
-                                }
-                            )
-                        elif analyzer_name == "truth_decay":
-                            real_median = results["median_ranks"][
-                                results["median_ranks"]["news_type"] == "Real"
-                            ]["median_rank"].values[0]
-                            fake_median = results["median_ranks"][
-                                results["median_ranks"]["news_type"] == "Fake"
-                            ]["median_rank"].values[0]
-
-                            model_summary.update(
-                                {
-                                    "real_median_rank": real_median,
-                                    "fake_median_rank": fake_median,
-                                    "rank_gap": real_median - fake_median,
-                                }
-                            )
-                        elif analyzer_name == "failure":
-                            model_summary.update(
-                                {
-                                    "failure_rate_pct": results["overall"]["failure_rate_pct"],
-                                    "total_failures": results["overall"]["total_failures"],
-                                    "fake_involvement_pct": results["fake_involvement"][
-                                        "fake_involvement_pct"
-                                    ],
-                                    "failures_with_fake": results["fake_involvement"][
-                                        "fake_involved"
-                                    ],
-                                }
-                            )
-
-                        analyzer_summary_data.append(model_summary)
-
-                    # Save analyzer summary for all models
-                    if analyzer_summary_data:
-                        analyzer_summary_df = pd.DataFrame(analyzer_summary_data)
-                        analyzer_summary_path = (
-                            self.results_dir / f"{analyzer_name}_summary_all_models.csv"
-                        )
-                        analyzer_summary_df.to_csv(analyzer_summary_path, index=False)
-                        print(
-                            f"\n✅ Saved {analyzer_name} summary for all models: {analyzer_summary_path.name}"
-                        )
-
-                    # Create comparison visualizations
+                    model_summary = {"model": model_name, "benchmark": benchmark}
                     if analyzer_name == "exposure":
-                        comparison = analyzer.compare_models(model_results, top_k=top_k)
-                        self.visualizer.plot_exposure_comparison(comparison, top_k=top_k)
-
+                        model_summary.update(
+                            {
+                                "avg_fake_in_top_k": results["exposure"]["avg_fake_count"],
+                                "max_fake_in_top_k": results["exposure"]["max_fake_count"],
+                                "queries_with_fake_pct": results["exposure"][
+                                    "users_with_fake_pct"
+                                ],
+                                "avg_fake_ratio": results["exposure"]["avg_fake_ratio"],
+                                "MC@10": results["mc_metrics"].get("MC@10", 0.0),
+                            }
+                        )
                     elif analyzer_name == "truth_decay":
-                        comparison = analyzer.compare_models(model_results, top_k=top_k)
-                        # Create rank comparison plot
-                        rank_data = {}
-                        for model_name, results_df in model_results.items():
-                            df = results_df.copy()
-                            df["rank"] = df.groupby("user_id")["score"].rank(
-                                method="first", ascending=False
-                            )
-                            df["news_type"] = df["is_fake"].apply(lambda x: "Fake" if x else "Real")
-                            rank_data[model_name] = df
-
-                        self.visualizer.plot_rank_comparison(rank_data)
-
+                        median = results["median_ranks"].set_index("news_type")["median_rank"]
+                        real_median = median.get("Real", float("nan"))
+                        fake_median = median.get("Fake", float("nan"))
+                        model_summary.update(
+                            {
+                                "real_median_rank": real_median,
+                                "fake_median_rank": fake_median,
+                                "rank_gap": real_median - fake_median,
+                            }
+                        )
                     elif analyzer_name == "failure":
-                        comparison = analyzer.compare_models(model_results)
-                        self.visualizer.plot_failure_analysis(comparison)
+                        model_summary.update(
+                            {
+                                "failure_rate_pct": results["overall"]["failure_rate_pct"],
+                                "total_failures": results["overall"]["total_failures"],
+                                "fake_involvement_pct": results["fake_involvement"][
+                                    "fake_involvement_pct"
+                                ],
+                                "failures_with_fake": results["fake_involvement"][
+                                    "fake_involved"
+                                ],
+                            }
+                        )
+                    analyzer_summary_data.append(model_summary)
+
+                summary_path = self.results_dir / f"{analyzer_name}_{benchmark}_summary.csv"
+                pd.DataFrame(analyzer_summary_data).to_csv(summary_path, index=False)
+                print(f"\n✅ Saved {analyzer_name} summary: {summary_path.name}")
+
+                if analyzer_name == "exposure":
+                    comparison = analyzer.compare_models(model_results, top_k=top_k)
+                    self.visualizer.plot_exposure_comparison(comparison, top_k=top_k)
+                elif analyzer_name == "truth_decay":
+                    analyzer.compare_models(model_results, top_k=top_k)
+                    rank_data = {}
+                    for model_name, results_df in model_results.items():
+                        df = results_df.copy()
+                        df["rank"] = df.groupby("user_id")["score"].rank(
+                            method="first", ascending=False
+                        )
+                        df["news_type"] = df["is_fake"].apply(lambda x: "Fake" if x else "Real")
+                        rank_data[model_name] = df
+                    self.visualizer.plot_rank_comparison(rank_data)
+                elif analyzer_name == "failure":
+                    comparison = analyzer.compare_models(model_results)
+                    self.visualizer.plot_failure_analysis(comparison)
 
             except Exception as e:
                 print(f"❌ Error in {analyzer_name} analysis: {e}")
@@ -918,53 +504,29 @@ class ModelEvaluator:
 
                 traceback.print_exc()
 
-        print(f"\n{'='*70}")
-        print("ALL ANALYSES COMPLETE")
-        print(f"{'='*70}")
-        print(f"Results saved in: {self.results_dir}")
-
+        print(f"\nResults saved in: {self.results_dir}")
         return analysis_results
 
     def generate_report(self, output_path: Optional[Path] = None):
-        """
-        Generate comprehensive evaluation report.
-
-        Args:
-            output_path: Path to save report (default: results_dir/report.txt)
-        """
+        """Write a plain-text report of all metrics (model x benchmark)."""
         if output_path is None:
             output_path = self.results_dir / "evaluation_report.txt"
 
-        report_lines = []
-        report_lines.append("=" * 70)
-        report_lines.append("COMPREHENSIVE EVALUATION REPORT")
-        report_lines.append("=" * 70)
-        report_lines.append(f"Dataset: {self.config.dataset}")
-        report_lines.append(f"Experiment: {self.config.experiment_name}")
-        report_lines.append(f"Model: {self.config.model_name}")
-        report_lines.append("")
+        lines = ["=" * 70, "EVALUATION REPORT", "=" * 70]
+        lines.append(f"Dataset: {self.config.dataset}")
+        lines.append(f"Data root: {self.config.data_root}")
+        lines.append(f"Experiment: {self.config.experiment_name}")
+        lines.append(f"Model: {self.config.architecture} / {self.config.model_name}")
+        lines.append("")
 
-        # Add evaluation summary
         if self.evaluation_results:
-            report_lines.append("EVALUATION METRICS:")
-            report_lines.append("-" * 70)
-            for key, result in self.evaluation_results.items():
-                report_lines.append(f"\n{key}:")
-                for metric, value in result.items():
-                    if metric not in ["model", "benchmark"]:
-                        report_lines.append(f"  {metric}: {value:.4f}")
+            summary = pd.DataFrame(list(self.evaluation_results.values()))
+            cols = ["model", "benchmark", "n_queries", "AUC", "MRR", "NDCG@10", "HR@10", "MC@10"]
+            for bench, group in summary.groupby("benchmark", sort=False):
+                lines.append(f"\n[{bench}]")
+                lines.append(group[cols].to_string(index=False, float_format="%.4f"))
 
-        # Add analyzer summaries
-        for analyzer_name, analyzer in self.analyzers.items():
-            if analyzer.analysis_results:
-                report_lines.append(f"\n{analyzer.get_summary()}")
-
-        report_lines.append("\n" + "=" * 70)
-        report_lines.append("END OF REPORT")
-        report_lines.append("=" * 70)
-
-        # Save report
+        lines += ["", "=" * 70, "END OF REPORT", "=" * 70]
         with open(output_path, "w") as f:
-            f.write("\n".join(report_lines))
-
+            f.write("\n".join(lines))
         print(f"✅ Report saved: {output_path}")

@@ -1,9 +1,4 @@
-from .ranking import (
-    calculate_auc,
-    calculate_mrr,
-    calculate_ndcg_at_k,
-    calculate_recall_at_k,
-)
+from .ranking import query_ranking_metrics
 
 from .misinformation import (
     calculate_mc_at_k,
@@ -18,10 +13,7 @@ from .utility import (
 
 __all__ = [
     # Ranking metrics
-    "calculate_auc",
-    "calculate_mrr",
-    "calculate_ndcg_at_k",
-    "calculate_recall_at_k",
+    "query_ranking_metrics",
     # Misinformation metrics
     "calculate_mc_at_k",
     "calculate_fake_exposure",

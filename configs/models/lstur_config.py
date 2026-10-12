@@ -71,6 +71,8 @@ class LSTURConfig(ModelConfig):
         print("=" * 70)
         print(f"Architecture: {self.architecture}")
         print(f"Dataset: {self.dataset}")
+        print(f"Model Type: {self.model_type}" + (f" ({self.poison_set})" if self.poison_set else ""))
+        print(f"Data Root: {self.data_root}")
         print(f"Language Model: {self.model_name}")
         print(f"\nArchitecture Details:")
         print(f"  - Word embedding dim: {self.word_embedding_dim}")

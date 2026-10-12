@@ -4,11 +4,12 @@ from .dataset import (
 )
 
 from .collate import collate_fn
-from .preprocessing import convert_pairwise_to_listwise
+from .preprocessing import to_groups, build_user_map
 
 __all__ = [
     "BaseNewsDataset",
     "NewsDataset",
     "collate_fn",
-    "convert_pairwise_to_listwise",
+    "to_groups",
+    "build_user_map",
 ]

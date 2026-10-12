@@ -185,7 +185,6 @@ class BaseAnalyzer(ABC):
         self,
         results_df: pd.DataFrame,
         save: bool = True,
-        unlearned_name: str = "unlearned",
         **kwargs,
     ) -> Dict[str, Any]:
         """
@@ -194,7 +193,6 @@ class BaseAnalyzer(ABC):
         Args:
             results_df: DataFrame with evaluation results
             save: Whether to save results to file
-            unlearned_name: Name for unlearned model (used in file naming)
             **kwargs: Additional parameters for analyze()
 
         Returns:
@@ -210,14 +208,7 @@ class BaseAnalyzer(ABC):
 
         # Save if requested
         if save:
-            # Check if this analyzer has unlearned_name parameter
-            if (
-                hasattr(self, "save_results")
-                and "unlearned_name" in self.save_results.__code__.co_varnames
-            ):
-                results_path = self.save_results(results, unlearned_name=unlearned_name)
-            else:
-                results_path = self.save_results(results)
+            results_path = self.save_results(results)
             print(f"✅ Results saved: {results_path}")
 
         # Print summary
