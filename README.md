@@ -29,6 +29,7 @@ A research framework for neural news recommendation. Supports four SOTA architec
 - [Configuration](#configuration)
 - [Training](#training)
 - [Evaluation](#evaluation)
+- [Forget-Set Features for Coreset Selection](#forget-set-features-for-coreset-selection)
 - [API Reference](#api-reference)
 - [Project Structure](#project-structure)
 - [Citation](#citation)
@@ -390,6 +391,40 @@ mean the model promotes that fake news less.
 | `TruthDecayAnalyzer` | `truth_decay` | Rank distribution of fake vs real items |
 | `FailureAnalyzer` | `failure` | Rate at which a negative outscores the target |
 
+
+---
+
+## Forget-Set Features for Coreset Selection
+
+Standalone step (not part of training or evaluation) for UPCORE coreset
+selection in fakeun-dataprep (`coreset_selection`, `--method upcore`). It
+runs the model to be unlearned over a forget set and saves one feature
+vector per K+1 group: the user embedding, the embedding of the positive
+(fake) candidate, and their elementwise product (which sums to the click
+logit). Works for all four architectures.
+
+```bash
+python scripts/extract_forget_features.py \
+    --config configs/experiments/nrms/nrms_bert_frozen_politifact.yaml \
+    --checkpoint outputs/politifact/.../checkpoints/poisoned_A_r0.5_s1-last.ckpt \
+    --forget ../fakeun-dataprep/output/problem2/politifact/stage4/A_r0.5_s1/flags/flag_050/forget_model.csv
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--config FILE` | — | Experiment YAML the model was trained with |
+| `--checkpoint CKPT` | — | Model to unlearn (any path; `outputs/` can live elsewhere) |
+| `--forget CSV` | — | `forget_model.csv` |
+| `--data-root DIR` | config | fakeun-dataprep output folder (for `news_items.csv`) |
+| `--user-map JSON` | next to checkpoint | LSTUR user map |
+| `--out NPZ` | `<forget dir>/coresets/forget_features__<run>.npz` | Output file |
+| `--batch-size N` | `val_batch_size` | Inference batch size |
+| `--allow-mismatch` | off | Allow a checkpoint whose A set differs from the forget file's |
+
+The run's timing (model load, data load, forward passes, total) is saved
+in the `.npz` and in `<out>.timing.json`; fakeun-dataprep adds it to the
+UPCORE selection time in its `timing_log.csv`.
+
 ---
 
 ## API Reference
@@ -491,7 +526,8 @@ plm4newsrs/
 │   └── utils/                  # seed.py
 ├── scripts/
 │   ├── train.py
-│   └── evaluate.py
+│   ├── evaluate.py
+│   └── extract_forget_features.py   # UPCORE coreset features (standalone)
 ├── Makefile
 ├── train.sh                    # batch: train + evaluate several configs
 └── requirements.txt
