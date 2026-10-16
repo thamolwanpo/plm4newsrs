@@ -41,25 +41,32 @@ category_embedding_dim: 100
 num_users: 50001
 user_embedding_dim: 50
 long_short_term_method: "ini"
-
-# Attention configuration
-attention_hidden_dim: 200
-max_history_length: 5  # = HISTORY_LEN in fakeun-dataprep
-drop_rate: 0.2
+use_user_embedding: true
+user_drop_rate: 0.3
+embedding_weight_decay: 1.0e-4
 
 # Masking probability
 masking_probability: 0.5
+mask_user_to_zero: true
+
+# Head on top of BERT
+bert_head: "linear"
+bert_drop_rate: 0.2
+bert_aggregation: "mean"
+
+# Attention configuration
 
 # Training hyperparameters
 epochs: 3
 train_batch_size: 32
-val_batch_size: 64
+val_batch_size: 32
 learning_rate: 2.0e-5
 early_stopping_patience: 3
 
 # Paths
 base_dir: null
-data_root: null  # fakeun-dataprep output for the dataset (default: data/problem2/{dataset})
+data_root: '/home/thamolwan/Documents/P2/data/politifact'  # fakeun-dataprep output for the dataset (default: data/problem2/{dataset})
+
 
 # Reproducibility
 seed: 42

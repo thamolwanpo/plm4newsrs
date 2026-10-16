@@ -1,0 +1,75 @@
+# configs/experiments/lstur/lstur_bert_frozen.yaml
+
+# Dataset configuration
+dataset: "gossipcop"
+experiment_name: "lstur_model"
+model_type: "clean"
+
+# Architecture
+architecture: "lstur"
+word_embedding_dim: 768  # BERT embedding size
+
+# Model configuration
+model_name: "bert-base-uncased"
+use_pretrained_lm: true
+fine_tune_lm: false
+finetune_layers: 0
+
+# GloVe-specific (not used with BERT)
+glove_file_path: "lm_models/glove.42B.300d.txt"
+glove_model: "glove-42B-300"
+glove_dim: 300
+glove_aggregation: "attention"
+
+# Text encoder hyperparameters
+max_title_length: 30
+
+# For additive attention
+query_vector_dim: 200
+
+# CNN configuration
+num_filters: 300
+window_size: 3
+
+# Category/subcategory configuration
+use_category: false
+use_subcategory: false
+num_categories: 275
+category_embedding_dim: 100
+
+# User representation configuration
+num_users: 50001
+user_embedding_dim: 50
+long_short_term_method: "ini"
+use_user_embedding: true
+user_drop_rate: 0.3
+embedding_weight_decay: 1.0e-4
+
+# Masking probability
+masking_probability: 0.5
+mask_user_to_zero: true
+
+# Head on top of BERT
+bert_head: "linear"
+bert_drop_rate: 0.2
+bert_aggregation: "mean"
+
+# Attention configuration
+
+# Training hyperparameters
+epochs: 3
+train_batch_size: 32
+val_batch_size: 32
+learning_rate: 2.0e-5
+early_stopping_patience: 3
+
+# Paths
+base_dir: null
+data_root: '/home/thamolwan/Documents/P2/data/gossipcop'   # fakeun-dataprep output for the dataset (default: data/problem2/{dataset})
+
+# Reproducibility
+seed: 42
+
+# Additional training options
+gradient_clip_val: 1.0
+warmup_steps: 0

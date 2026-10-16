@@ -42,7 +42,9 @@ CKPT_PATTERN = re.compile(r"^(?P<run>.+?)-epoch=(?P<epoch>\d+)-val_auc=(?P<auc>[
 
 
 def parse_run_name(run_name: str) -> Tuple[str, Optional[str]]:
-    """'clean' -> ('clean', None); 'poisoned_A_r0.5_s1' -> ('poisoned', 'A_r0.5_s1')."""
+    """Parse 'clean', 'clean_seed42', or 'poisoned_A_r0.5_s1' run names."""
+    if run_name == "clean" or re.fullmatch(r"clean_seed\d+", run_name):
+        return "clean", None
     if run_name.startswith("poisoned_"):
         return "poisoned", run_name[len("poisoned_") :]
     return run_name, None
@@ -121,23 +123,36 @@ class ModelEvaluator:
     # Discovery
     # ------------------------------------------------------------------ #
     def discover_models(self, model_names: Optional[List[str]] = None) -> Dict[str, Path]:
-        """Best checkpoint (highest val_auc in the filename) per trained model.
+        """Last-epoch checkpoint per model, falling back to best legacy checkpoint.
 
         Args:
             model_names: run names or prefixes to keep, e.g. ["clean",
                 "poisoned_A_r0.5_s1"] or ["poisoned"] (default: all)
         """
-        best: Dict[str, Tuple[float, Path]] = {}
+        selected: Dict[str, Tuple[int, float, Path]] = {}
         for path in sorted(self.paths["checkpoints_dir"].glob("*.ckpt")):
-            match = CKPT_PATTERN.match(path.stem)
-            run, auc = (match["run"], float(match["auc"])) if match else (path.stem, float("-inf"))
+            is_last = path.stem.endswith("-last")
+            if is_last:
+                run = path.stem[:-5]
+                if run.endswith("-resumed"):
+                    run = run[: -len("-resumed")]
+                rank = (1, path.stat().st_mtime)
+            else:
+                match = CKPT_PATTERN.match(path.stem)
+                run, auc = (
+                    (match["run"], float(match["auc"]))
+                    if match
+                    else (path.stem, float("-inf"))
+                )
+                rank = (0, auc)
             if run.endswith("-resumed"):
                 run = run[: -len("-resumed")]
             if model_names and not any(run == m or run.startswith(m) for m in model_names):
                 continue
-            if run not in best or auc > best[run][0]:
-                best[run] = (auc, path)
-        return {run: path for run, (_, path) in sorted(best.items())}
+            candidate = (*rank, path)
+            if run not in selected or candidate[:2] > selected[run][:2]:
+                selected[run] = candidate
+        return {run: path for run, (_, _, path) in sorted(selected.items())}
 
     def discover_benchmarks(self, benchmark_names: Optional[List[str]] = None) -> List[Path]:
         """stage6 benchmark CSVs (exact names, default: all)."""
@@ -181,7 +196,7 @@ class ModelEvaluator:
     def evaluate_all(
         self, model_names: Optional[List[str]] = None, benchmark_names: Optional[List[str]] = None
     ) -> pd.DataFrame:
-        """Evaluate the best checkpoint of every trained model on every benchmark."""
+        """Evaluate the last checkpoint of every trained model on every benchmark."""
         set_seed(self.config.seed)
 
         models = self.discover_models(model_names)
@@ -212,8 +227,13 @@ class ModelEvaluator:
         """Load one checkpoint and evaluate it on its benchmark plan."""
         model_path = Path(model_path)
         if run_name is None:
-            match = CKPT_PATTERN.match(model_path.stem)
-            run_name = match["run"] if match else model_path.stem
+            if model_path.stem.endswith("-last"):
+                run_name = model_path.stem[:-5]
+                if run_name.endswith("-resumed"):
+                    run_name = run_name[: -len("-resumed")]
+            else:
+                match = CKPT_PATTERN.match(model_path.stem)
+                run_name = match["run"] if match else model_path.stem
         print(f"\n🔄 Loading model: {run_name} ({model_path.name})")
 
         tokenizer = None
@@ -396,6 +416,7 @@ class ModelEvaluator:
         model_names: Optional[List[str]] = None,
         benchmark: str = "standard",
         top_k: int = 10,
+        analyzer_names: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """
         Run the enabled analyzers on one benchmark for every evaluated model.
@@ -404,6 +425,7 @@ class ModelEvaluator:
             model_names: run names or prefixes to include (default: all)
             benchmark: exact benchmark name (default: "standard")
             top_k: Top-k for exposure analysis
+            analyzer_names: analyzers to run (default: all enabled)
         """
         print(f"\n{'='*70}")
         print(f"RUNNING ANALYSES on {benchmark}")
@@ -424,7 +446,16 @@ class ModelEvaluator:
         print(f"Analyzing {len(model_results)} models: {sorted(model_results)}")
         analysis_results = {}
 
-        for analyzer_name, analyzer in self.analyzers.items():
+        selected_analyzers = (
+            self.analyzers.items()
+            if analyzer_names is None
+            else (
+                (name, analyzer)
+                for name, analyzer in self.analyzers.items()
+                if name in analyzer_names
+            )
+        )
+        for analyzer_name, analyzer in selected_analyzers:
             print(f"\n{'─'*70}")
             print(f"Running {analyzer_name} analysis...")
             print(f"{'─'*70}")
@@ -482,7 +513,14 @@ class ModelEvaluator:
 
                 if analyzer_name == "exposure":
                     comparison = analyzer.compare_models(model_results, top_k=top_k)
-                    self.visualizer.plot_exposure_comparison(comparison, top_k=top_k)
+                    filename = (
+                        "exposure_comparison.png"
+                        if benchmark == "standard"
+                        else f"exposure_comparison_{benchmark}.png"
+                    )
+                    self.visualizer.plot_exposure_comparison(
+                        comparison, top_k=top_k, filename=filename
+                    )
                 elif analyzer_name == "truth_decay":
                     analyzer.compare_models(model_results, top_k=top_k)
                     rank_data = {}

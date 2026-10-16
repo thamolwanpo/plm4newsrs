@@ -1,17 +1,19 @@
+# configs/experiments/lstur/lstur_bert_finetune.yaml
+
 # Dataset configuration
-dataset: "politifact"
-experiment_name: "naml_model"
+dataset: "gossipcop"
+experiment_name: "lstur_model"
 model_type: "clean"
 
 # Architecture
-architecture: "naml"
-word_embedding_dim: 768 # BERT embedding size
+architecture: "lstur"
+word_embedding_dim: 768  # BERT embedding size
 
 # Model configuration
 model_name: "bert-base-uncased"
 use_pretrained_lm: true
 fine_tune_lm: true
-finetune_layers: 2 # Fine-tune last 2 layers of BERT
+finetune_layers: 2  # Fine-tune last 2 layers of BERT
 
 # GloVe-specific (not used with BERT)
 glove_file_path: "lm_models/glove.42B.300d.txt"
@@ -19,37 +21,38 @@ glove_model: "glove-42B-300"
 glove_dim: 300
 glove_aggregation: "attention"
 
-# Multi-view configuration (which views to use)
-use_title: true
-use_body: true
-use_category: false  # Disabled for now
-use_subcategory: false  # Disabled for now
-
 # Text encoder hyperparameters
 max_title_length: 30
-max_body_length: 100
 
 # For additive attention
 query_vector_dim: 200
 
 # CNN configuration
-num_filters: 300  # Must match attention_hidden_dim (200) for dimension compatibility
-window_sizes: [3]  # Single window size as per reference implementation
+num_filters: 300
+window_size: 3
 
-# Category/subcategory configuration (if enabled)
-num_categories: 100
+# Category/subcategory configuration
+use_category: false
+use_subcategory: false
+num_categories: 275  # Adjust based on your dataset
 category_embedding_dim: 100
-num_subcategories: 200
-subcategory_embedding_dim: 100
+
+# User representation configuration
+num_users: 50001  # Adjust based on your dataset
+user_embedding_dim: 50
+long_short_term_method: "ini"  # 'ini' or 'con'
 
 # Attention configuration
 attention_hidden_dim: 200
 max_history_length: 5  # = HISTORY_LEN in fakeun-dataprep
 drop_rate: 0.2
 
+# Masking probability for training
+masking_probability: 0.5
+
 # Training hyperparameters
-epochs: 3 
-train_batch_size: 32  # Larger batch since less memory needed
+epochs: 10
+train_batch_size: 32
 val_batch_size: 64
 learning_rate: 2.0e-5
 early_stopping_patience: 3

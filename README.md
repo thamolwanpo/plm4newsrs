@@ -14,7 +14,7 @@ A research framework for neural news recommendation. Supports four SOTA architec
 - **Four Model Architectures**: Simple (two-tower), NAML (multi-view), NRMS (self-attention), LSTUR (long/short-term user modeling)
 - **Multiple PLM Backends**: BERT, RoBERTa, or GloVe embeddings
 - **Flexible Training**: Fine-tune or freeze PLM layers
-- **Clean + Poisoned Training**: One clean model plus one model per poisoned set (`A_r{ratio}_s{seed}`)
+- **Clean + Poisoned Training**: Three clean-model seeds plus one model per poisoned set (`A_r{ratio}_s{seed}`)
 - **All stage6 Benchmarks**: standard, adversarial, pattern and poison probes, with AUC, MRR, NDCG, HR, fake-exposure metrics and analyzers
 - **PyTorch Lightning**: Checkpointing, early stopping, reproducible seeds
 
@@ -114,7 +114,7 @@ u0198,R0028,Another story,False,"['R0012', 'F0031']","['...', '...']",0
 ## Quick Start
 
 ```bash
-# Train the clean model + one poisoned model per stage4/A_* set
+# Train the clean model on three consecutive seeds + one poisoned model per stage4/A_* set
 python scripts/train.py --config configs/experiments/nrms/nrms_glove.yaml --train-all \
     --data-root ../fakeun-dataprep/output/problem2/politifact
 
@@ -274,14 +274,14 @@ Pre-built configs live in `configs/experiments/{simple,naml,nrms,lstur}/`.
 
 | Model | Training set | Run name / checkpoint prefix |
 |-------|--------------|------------------------------|
-| clean | `stage3/train_clean_model.csv` | `clean` |
+| clean | `stage3/train_clean_model.csv` | `clean_seed{seed}` in `--train-all`; `clean` for a single run |
 | poisoned | `stage4/A_r{ratio}_s{seed}/train_model.csv` | `poisoned_A_r{ratio}_s{seed}` |
 
 Every model is validated (early stopping, checkpoint selection on `val_auc`)
 on `stage3/val_model.csv`.
 
 ```bash
-# Clean model + every poisoned set
+# Three clean-model seeds + every poisoned set
 python scripts/train.py --config configs/experiments/nrms/nrms_glove.yaml --train-all
 
 # --train-all on some poisoned sets only
@@ -299,7 +299,7 @@ python scripts/train.py --config configs/experiments/nrms/nrms_glove.yaml --pois
 |------|-------------|
 | `--config FILE` | Path to YAML config (required) |
 | `--data-root DIR` | fakeun-dataprep output folder of the dataset |
-| `--train-all` | Train the clean model and one model per poisoned set |
+| `--train-all` | Train the clean model on three consecutive seeds starting at `seed`, and one model per poisoned set |
 | `--poison-sets A…` | Poisoned sets for `--train-all` (default: all in `stage4/`) |
 | `--model-type clean\|poisoned` | Train a single model |
 | `--poison-set A_r…_s…` | Poisoned set of the single model (implies `--model-type poisoned`) |
@@ -320,7 +320,7 @@ config = load_config("configs/experiments/nrms/nrms_glove.yaml")
 config.model_type, config.poison_set = "poisoned", "A_r0.5_s1"
 best_ckpt = train_model(config)
 
-all_ckpts = train_all_models(config)   # {"clean": ..., "poisoned_A_r0.5_s1": ..., ...}
+all_ckpts = train_all_models(config)   # {"clean_seed42": ..., "clean_seed43": ..., "clean_seed44": ..., ...}
 ```
 
 ---
@@ -436,6 +436,12 @@ evaluator = ModelEvaluator(config=config, enable_analyses=["exposure", "failure"
 summary_df = evaluator.evaluate_all(model_names=["clean", "poisoned_A_r0.5_s1"])
 evaluator.run_analyses(benchmark="standard")
 ```
+
+The evaluation CLI runs exposure analysis on `standard`, `standard_clean`, and
+`standard_mixed` by default. Other analyses continue to run on the selected
+`--analysis-benchmark` (default: `standard`).
+Training saves and evaluation prefers the final epoch checkpoint (`*-last.ckpt`);
+existing runs without one continue to use their best-validation-AUC checkpoint.
 
 ### Data
 

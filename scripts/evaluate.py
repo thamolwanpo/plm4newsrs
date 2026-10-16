@@ -2,7 +2,7 @@
 """
 CLI for evaluating news recommendation models on the stage6 benchmarks.
 
-For every trained model (best checkpoint per model) it evaluates:
+For every trained model (last-epoch checkpoint per model, when available) it evaluates:
   standard, standard_clean, standard_mixed, adversarial,
   pattern_probe(_realneg), poison_probe(_realneg)
 plus poison_probe(_realneg)@<A set>: the poison probes restricted to the
@@ -152,6 +152,16 @@ Examples:
             evaluator.run_analyses(
                 model_names=args.models, benchmark=args.analysis_benchmark, top_k=args.top_k
             )
+            if args.analysis_benchmark == "standard" and "exposure" in enable_analyses:
+                evaluated_benchmarks = set(summary_df["benchmark"])
+                for benchmark in ("standard_clean", "standard_mixed"):
+                    if benchmark in evaluated_benchmarks:
+                        evaluator.run_analyses(
+                            model_names=args.models,
+                            benchmark=benchmark,
+                            top_k=args.top_k,
+                            analyzer_names=["exposure"],
+                        )
 
         if args.generate_report:
             evaluator.generate_report()

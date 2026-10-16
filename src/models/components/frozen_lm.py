@@ -17,16 +17,47 @@ class FrozenLMCache:
     checkpoints.
     """
 
-    def __init__(self, cls_only: bool, chunk_size: int = 256):
+    def __init__(
+        self,
+        cls_only: bool = True,
+        aggregation: str = "cls",
+        chunk_size: int = 256,
+    ):
         """
         Args:
-            cls_only: cache only the [CLS] vector (batch, hidden) instead of the
-                full last hidden state (batch, seq_len, hidden)
+            cls_only: cache a single pooled vector per article (batch, hidden)
+                instead of the full last hidden state (batch, seq_len, hidden)
+            aggregation: pooling strategy when caching pooled vectors:
+                'cls' (CLS token), 'mean' (masked token mean),
+                'last4_mean' (average of last 4 layers, masked token mean)
             chunk_size: max sequences per LM call when filling the cache
         """
         self.cls_only = cls_only
+        self.aggregation = aggregation
         self.chunk_size = chunk_size
         self.store: Dict[bytes, torch.Tensor] = {}
+
+    def _pool_chunk(
+        self, lm: nn.Module, chunk_ids: torch.Tensor, chunk_mask: torch.Tensor
+    ) -> torch.Tensor:
+        if self.aggregation == "last4_mean":
+            out = lm(input_ids=chunk_ids, attention_mask=chunk_mask, output_hidden_states=True)
+            last_4 = torch.stack(out.hidden_states[-4:]).mean(dim=0)
+            mask = chunk_mask.unsqueeze(-1).float()
+            sum_emb = (last_4 * mask).sum(dim=1)
+            sum_mask = torch.clamp(mask.sum(dim=1), min=1e-9)
+            return (sum_emb / sum_mask).float()
+
+        hidden = lm(input_ids=chunk_ids, attention_mask=chunk_mask)[0]
+        if not self.cls_only and self.aggregation == "none":
+            return hidden.half()
+        elif self.aggregation == "mean":
+            mask = chunk_mask.unsqueeze(-1).float()
+            sum_emb = (hidden * mask).sum(dim=1)
+            sum_mask = torch.clamp(mask.sum(dim=1), min=1e-9)
+            return (sum_emb / sum_mask).float()
+        else:  # 'cls' or fallback
+            return hidden[:, 0].float()
 
     def __call__(
         self, lm: nn.Module, input_ids: torch.Tensor, attention_mask: torch.Tensor
@@ -48,11 +79,13 @@ class FrozenLMCache:
             outputs = []
             with torch.no_grad():
                 for chunk in idx.split(self.chunk_size):
-                    hidden = lm(input_ids=input_ids[chunk], attention_mask=attention_mask[chunk])[0]
-                    outputs.append(hidden[:, 0] if self.cls_only else hidden.half())
+                    outputs.append(
+                        self._pool_chunk(lm, input_ids[chunk], attention_mask[chunk])
+                    )
             lm.train(was_training)
+            is_single_vector = self.cls_only or self.aggregation in ("cls", "mean", "last4_mean")
             for key, value in zip(missing, torch.cat(outputs)):
-                self.store[key] = value.float() if self.cls_only else value
+                self.store[key] = value.float() if is_single_vector else value
 
         out = torch.stack([self.store[key] for key in keys])
         return out.float().to(input_ids.device)

@@ -9,7 +9,7 @@ import torch
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer
 import lightning as pl
-from lightning.pytorch.callbacks import ModelCheckpoint, EarlyStopping
+from lightning.pytorch.callbacks import Callback, EarlyStopping
 from lightning.pytorch.loggers import TensorBoardLogger
 
 from src.data import NewsDataset
@@ -19,7 +19,23 @@ from src.models.registry import get_model, get_model_class
 from src.utils.seed import set_seed
 
 
-def train_model(config, device: Optional[torch.device] = None, return_trainer: bool = False) -> str:
+class LastEpochCheckpoint(Callback):
+    """Save the final model state under a stable, run-specific checkpoint name."""
+
+    def __init__(self, checkpoints_dir: Path, run_name: str):
+        self.checkpoint_path = Path(checkpoints_dir) / f"{run_name}-last.ckpt"
+
+    def on_train_end(self, trainer: pl.Trainer, pl_module: pl.LightningModule) -> None:
+        self.checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+        trainer.save_checkpoint(str(self.checkpoint_path))
+
+
+def train_model(
+    config,
+    device: Optional[torch.device] = None,
+    return_trainer: bool = False,
+    run_name: Optional[str] = None,
+) -> str:
     """
     Train a single model.
 
@@ -27,13 +43,14 @@ def train_model(config, device: Optional[torch.device] = None, return_trainer: b
         config: Model configuration (ModelConfig instance)
         device: Device to train on (auto-detected if None)
         return_trainer: If True, return trainer instead of checkpoint path
+        run_name: Optional name for this training run (defaults to config.run_name)
 
     Returns:
-        Path to best model checkpoint (or trainer if return_trainer=True)
+        Path to the last-epoch checkpoint (or trainer if return_trainer=True)
     """
     # Set seed for reproducibility
     set_seed(config.seed)
-    _ = config.run_name  # validates model_type / poison_set
+    run_name = run_name or config.run_name  # validates model_type / poison_set
 
     # Print configuration
     config.print_config()
@@ -63,7 +80,7 @@ def train_model(config, device: Optional[torch.device] = None, return_trainer: b
     user_map = None
     if config.architecture == "lstur":
         user_map = build_user_map(read_model_csv(paths["train_csv"])["user_id"])
-        map_path = user_map_path(paths["checkpoints_dir"], config.run_name)
+        map_path = user_map_path(paths["checkpoints_dir"], run_name)
         with open(map_path, "w") as f:
             json.dump(user_map, f)
         print(f"  Saved LSTUR user map ({len(user_map)} users): {map_path}")
@@ -109,18 +126,10 @@ def train_model(config, device: Optional[torch.device] = None, return_trainer: b
     lit_model = get_model(config.architecture, config)
 
     # Setup logging
-    logger = TensorBoardLogger(save_dir=paths["logs_dir"], name=f"logs_{config.run_name}")
+    logger = TensorBoardLogger(save_dir=paths["logs_dir"], name=f"logs_{run_name}")
 
     # Setup callbacks
-    checkpoint_callback = ModelCheckpoint(
-        monitor="val_auc",
-        dirpath=paths["checkpoints_dir"],
-        filename=f"{config.run_name}-{{epoch:02d}}-{{val_auc:.4f}}",
-        save_top_k=1,
-        mode="max",
-        verbose=True,
-        save_last=False,
-    )
+    last_epoch_checkpoint = LastEpochCheckpoint(paths["checkpoints_dir"], run_name)
 
     early_stopping = EarlyStopping(
         monitor="val_auc", patience=config.early_stopping_patience, verbose=True, mode="max"
@@ -136,7 +145,7 @@ def train_model(config, device: Optional[torch.device] = None, return_trainer: b
         accelerator="gpu" if torch.cuda.is_available() else "cpu",
         devices=1,
         logger=logger,
-        callbacks=[checkpoint_callback, early_stopping],
+        callbacks=[last_epoch_checkpoint, early_stopping],
         log_every_n_steps=10,
         enable_progress_bar=True,
         gradient_clip_val=config.gradient_clip_val,
@@ -153,13 +162,12 @@ def train_model(config, device: Optional[torch.device] = None, return_trainer: b
     print("\n" + "=" * 70)
     print("TRAINING COMPLETE")
     print("=" * 70)
-    print(f"✅ Best model saved: {checkpoint_callback.best_model_path}")
-    print(f"✅ Best val_auc: {checkpoint_callback.best_model_score:.4f}")
+    print(f"✅ Last-epoch model saved: {last_epoch_checkpoint.checkpoint_path}")
 
     if return_trainer:
         return trainer
 
-    return checkpoint_callback.best_model_path
+    return str(last_epoch_checkpoint.checkpoint_path)
 
 
 def user_map_path(checkpoints_dir: Path, run_name: str) -> Path:
@@ -168,15 +176,21 @@ def user_map_path(checkpoints_dir: Path, run_name: str) -> Path:
 
 
 def get_training_runs(config) -> List[tuple]:
-    """(model_type, poison_set) pairs trained by --train-all: the clean model
-    plus one poisoned model per A set (config.poison_sets, or all found)."""
+    """(model_type, poison_set, seed, run_name) entries for --train-all."""
     poison_sets = config.poison_sets or config.discover_poison_sets()
-    return [("clean", None)] + [("poisoned", a) for a in poison_sets]
+    clean_runs = [
+        ("clean", None, seed, f"clean_seed{seed}")
+        for seed in range(config.seed, config.seed + 3)
+    ]
+    poisoned_runs = [
+        ("poisoned", poison_set, config.seed, None) for poison_set in poison_sets
+    ]
+    return clean_runs + poisoned_runs
 
 
 def train_all_models(config, device: Optional[torch.device] = None) -> Dict[str, str]:
     """
-    Train the clean model and every poisoned model.
+    Train three clean seeds and every poisoned model.
 
     Args:
         config: Base configuration (copied for each run)
@@ -191,28 +205,33 @@ def train_all_models(config, device: Optional[torch.device] = None) -> Dict[str,
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     runs = get_training_runs(config)
-    if len(runs) == 1:
+    if not any(model_type == "poisoned" for model_type, _, _, _ in runs):
         print(f"⚠️ No poisoned sets found in {config.data_root / 'stage4'}")
 
+    run_names = [
+        run_name or f"{model_type}_{poison_set}"
+        for model_type, poison_set, _, run_name in runs
+    ]
     print("\n" + "=" * 70)
-    print(f"TRAINING ALL MODELS: {', '.join(p or m for m, p in runs)}")
+    print(f"TRAINING ALL MODELS: {', '.join(run_names)}")
     print("=" * 70)
 
     trained_models = {}
     failed_models = []
 
-    for i, (model_type, poison_set) in enumerate(runs, 1):
+    for i, (model_type, poison_set, seed, run_name) in enumerate(runs, 1):
         model_config = copy.deepcopy(config)
         model_config.model_type = model_type
         model_config.poison_set = poison_set
-        run_name = model_config.run_name
+        model_config.seed = seed
+        run_name = run_name or model_config.run_name
 
         print(f"\n{'='*70}")
         print(f"TRAINING [{i}/{len(runs)}]: {run_name}")
         print(f"{'='*70}")
 
         try:
-            model_path = train_model(model_config, device)
+            model_path = train_model(model_config, device, run_name=run_name)
 
             if model_path:
                 trained_models[run_name] = model_path
@@ -262,7 +281,7 @@ def resume_training(
         additional_epochs: Number of additional epochs to train
 
     Returns:
-        Path to new best checkpoint
+        Path to the checkpoint from the last epoch
     """
     print(f"\nResuming training from: {checkpoint_path}")
 
@@ -278,13 +297,8 @@ def resume_training(
     logger = TensorBoardLogger(save_dir=paths["logs_dir"], name=f"logs_{config.run_name}_resumed")
 
     # Setup callbacks
-    checkpoint_callback = ModelCheckpoint(
-        monitor="val_auc",
-        dirpath=paths["checkpoints_dir"],
-        filename=f"{config.run_name}-resumed-{{epoch:02d}}-{{val_auc:.4f}}",
-        save_top_k=1,
-        mode="max",
-        verbose=True,
+    last_epoch_checkpoint = LastEpochCheckpoint(
+        paths["checkpoints_dir"], f"{config.run_name}-resumed"
     )
 
     early_stopping = EarlyStopping(
@@ -297,7 +311,7 @@ def resume_training(
         accelerator="gpu" if torch.cuda.is_available() else "cpu",
         devices=1,
         logger=logger,
-        callbacks=[checkpoint_callback, early_stopping],
+        callbacks=[last_epoch_checkpoint, early_stopping],
         log_every_n_steps=10,
         enable_progress_bar=True,
     )
@@ -305,5 +319,5 @@ def resume_training(
     # Resume training
     trainer.fit(lit_model, train_loader, val_loader)
 
-    print(f"✅ Resumed training complete. Best model: {checkpoint_callback.best_model_path}")
-    return checkpoint_callback.best_model_path
+    print(f"✅ Resumed training complete. Last-epoch model: {last_epoch_checkpoint.checkpoint_path}")
+    return str(last_epoch_checkpoint.checkpoint_path)

@@ -108,8 +108,35 @@ class LitLSTURRecommender(pl.LightningModule):
         self.val_auc.reset()
 
     def configure_optimizers(self):
-        """Configure optimizer."""
-        return torch.optim.Adam(self.parameters(), lr=self.config.learning_rate)
+        """Configure optimizer with selective weight decay for embedding tables."""
+        embedding_weight_decay = getattr(self.config, "embedding_weight_decay", 1e-4)
+        weight_decay = getattr(self.config, "weight_decay", 0.0)
+
+        embedding_params = []
+        other_params = []
+
+        for name, param in self.named_parameters():
+            if not param.requires_grad:
+                continue
+            # Apply weight decay specifically to embedding tables (user ID, category, subcategory)
+            if "embedding" in name.lower() and "bert" not in name.lower():
+                embedding_params.append(param)
+            else:
+                other_params.append(param)
+
+        param_groups = []
+        if embedding_params:
+            param_groups.append({
+                "params": embedding_params,
+                "weight_decay": embedding_weight_decay,
+            })
+        if other_params:
+            param_groups.append({
+                "params": other_params,
+                "weight_decay": weight_decay,
+            })
+
+        return torch.optim.Adam(param_groups, lr=self.config.learning_rate)
 
     def predict_step(self, batch, batch_idx):
         """

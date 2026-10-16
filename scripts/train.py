@@ -29,7 +29,7 @@ Examples:
   # One poisoned model (stage4/A_r0.5_s1/train_model.csv)
   python scripts/train.py --config configs/experiments/nrms/nrms_glove.yaml --poison-set A_r0.5_s1
 
-  # Clean model + every poisoned set found in stage4/
+  # Clean models on three consecutive seeds + every poisoned set found in stage4/
   python scripts/train.py --config configs/experiments/nrms/nrms_glove.yaml --train-all
 
   # Point at the fakeun-dataprep output and override hyperparameters
@@ -118,7 +118,7 @@ Examples:
     parser.add_argument(
         "--train-all",
         action="store_true",
-        help="Train the clean model and one poisoned model per poisoned set",
+        help="Train the clean model on three consecutive seeds, plus one model per poisoned set",
     )
     parser.add_argument("--resume", type=str, help="Path to checkpoint to resume training from")
 

@@ -50,13 +50,13 @@ drop_rate: 0.2
 # Training hyperparameters
 epochs: 3 
 train_batch_size: 32  # Larger batch since less memory needed
-val_batch_size: 64
+val_batch_size: 16
 learning_rate: 2.0e-5
 early_stopping_patience: 3
 
 # Paths
 base_dir: null
-data_root: null  # fakeun-dataprep output for the dataset (default: data/problem2/{dataset})
+data_root: '/home/thamolwan/Documents/P2/data/gossipcop'  # fakeun-dataprep output for the dataset (default: data/problem2/{dataset})
 
 # Reproducibility
 seed: 42

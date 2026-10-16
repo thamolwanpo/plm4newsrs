@@ -51,7 +51,7 @@ drop_rate: 0.2
 masking_probability: 0.5
 
 # Training hyperparameters
-epochs: 3
+epochs: 10
 train_batch_size: 32
 val_batch_size: 64
 learning_rate: 2.0e-5
