@@ -53,6 +53,10 @@ def train_model(
     set_seed(config.seed)
     run_name = run_name or config.run_name  # validates model_type / poison_set
 
+    if config.model_type == "clean" and config.clean_learning_rate is not None:
+        config = copy.deepcopy(config)
+        config.learning_rate = config.clean_learning_rate
+
     # Print configuration
     config.print_config()
 

@@ -30,7 +30,7 @@ epochs: 3
 train_batch_size: 32
 val_batch_size: 32
 learning_rate: 2.0e-5
-weight_decay: 0.01  # AdamW decoupled weight decay (against overfitting)
+clean_learning_rate: 1.0e-5  # clean models only (they overfit faster); poisoned use learning_rate
 early_stopping_patience: 3
 
 # Paths

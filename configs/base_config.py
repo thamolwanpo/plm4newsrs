@@ -40,6 +40,8 @@ class BaseConfig:
     val_batch_size: int = 32
     learning_rate: float = 1e-5
     weight_decay: float = 0.0  # AdamW decoupled decay (LSTUR: Adam L2 on non-embedding params)
+    # Learning rate of clean models only (None = learning_rate); poisoned models use learning_rate
+    clean_learning_rate: Optional[float] = None
     early_stopping_patience: int = 3
     # Negatives per positive in training/validation groups (dataprep K)
     num_negatives: int = 4
