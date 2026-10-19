@@ -31,22 +31,6 @@ class LastEpochCheckpoint(Callback):
         trainer.save_checkpoint(str(self.checkpoint_path))
 
 
-class BestEpochCheckpoint(Callback):
-    """Save the epoch with the highest val_auc under a stable, run-specific name."""
-
-    def __init__(self, checkpoints_dir: Path, run_name: str):
-        self.checkpoint_path = Path(checkpoints_dir) / f"{run_name}-best.ckpt"
-        self.best_score = float("-inf")
-
-    def on_validation_end(self, trainer: pl.Trainer, pl_module: pl.LightningModule) -> None:
-        score = trainer.callback_metrics.get("val_auc")
-        if trainer.sanity_checking or score is None or score.item() <= self.best_score:
-            return
-        self.best_score = score.item()
-        self.checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
-        trainer.save_checkpoint(str(self.checkpoint_path))
-
-
 def train_model(
     config,
     device: Optional[torch.device] = None,
@@ -157,7 +141,6 @@ def train_model(
 
     # Setup callbacks
     last_epoch_checkpoint = LastEpochCheckpoint(paths["checkpoints_dir"], run_name)
-    best_epoch_checkpoint = BestEpochCheckpoint(paths["checkpoints_dir"], run_name)
     dynamics_tracker = TrainingDynamicsTracker(el2n_loader)
 
     early_stopping = EarlyStopping(
@@ -168,7 +151,7 @@ def train_model(
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    callbacks = [last_epoch_checkpoint, best_epoch_checkpoint, early_stopping, dynamics_tracker]
+    callbacks = [last_epoch_checkpoint, early_stopping, dynamics_tracker]
     if config.model_type == "clean":
         # Clean models keep a checkpoint of every epoch (all are evaluated)
         callbacks.append(epoch_checkpoints(paths["checkpoints_dir"], run_name))
@@ -197,10 +180,6 @@ def train_model(
     print("TRAINING COMPLETE")
     print("=" * 70)
     print(f"✅ Last-epoch model saved: {last_epoch_checkpoint.checkpoint_path}")
-    print(
-        f"✅ Best-epoch model saved (val_auc={best_epoch_checkpoint.best_score:.4f}): "
-        f"{best_epoch_checkpoint.checkpoint_path}"
-    )
 
     # Per-instance loss, C-proxy and EL2N ledgers, keyed by training CSV row
     dynamics_path = dynamics_tracker.save(training_dynamics_path(paths["results_dir"], run_name))
