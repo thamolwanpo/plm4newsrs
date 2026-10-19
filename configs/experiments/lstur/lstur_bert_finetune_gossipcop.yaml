@@ -1,7 +1,7 @@
 # configs/experiments/lstur/lstur_bert_finetune.yaml
 
 # Dataset configuration
-dataset: "politifact"
+dataset: "gossipcop"
 experiment_name: "lstur_model"
 model_type: "clean"
 
@@ -44,14 +44,14 @@ long_short_term_method: "ini"  # 'ini' or 'con'
 
 # Attention configuration
 attention_hidden_dim: 200
-max_history_length: 50
+max_history_length: 5  # = HISTORY_LEN in fakeun-dataprep
 drop_rate: 0.2
 
 # Masking probability for training
 masking_probability: 0.5
 
 # Training hyperparameters
-epochs: 3
+epochs: 10
 train_batch_size: 32
 val_batch_size: 64
 learning_rate: 2.0e-5
@@ -59,7 +59,7 @@ early_stopping_patience: 3
 
 # Paths
 base_dir: null
-models_dir: null
+data_root: null  # fakeun-dataprep output for the dataset (default: data/problem2/{dataset})
 
 # Reproducibility
 seed: 42

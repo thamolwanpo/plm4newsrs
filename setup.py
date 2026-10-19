@@ -74,7 +74,6 @@ setup(
         "console_scripts": [
             "plm4newsrs-train=scripts.train:main",
             "plm4newsrs-evaluate=scripts.evaluate:main",
-            "plm4newsrs-compare=scripts.compare_models:main",
         ],
     },
     include_package_data=True,

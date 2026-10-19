@@ -212,11 +212,5 @@ lm_models/
 
 # Data and Output files
 outputs/
-data/gossipcop/
-data/politifact/
-data/old-politifact/
-benchmarks/
-temp_unlearning_data/
+data/
 logs/
-notebooks/tables/
-notebooks/plots/

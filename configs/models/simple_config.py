@@ -66,20 +66,12 @@ class ModelConfig(BaseConfig):
         else:
             mode = "frozen"
 
-        folder_name = f"{lm_name}_{mode}"
-
-        if self.models_dir is not None:
-            models_dir_str = str(self.models_dir).lower()
-            if "llm" in models_dir_str:
-                folder_name = f"llm_{folder_name}"
-
-        return folder_name
+        return f"{lm_name}_{mode}"
 
     def get_paths(self) -> Dict[str, Path]:
         """Get all necessary file paths."""
         experiment_dir = self.base_dir / self.experiment_name
-        lm_folder = self.get_lm_folder_name()
-        lm_specific_dir = experiment_dir / lm_folder
+        lm_specific_dir = experiment_dir / self.get_lm_folder_name()
 
         paths = {
             "experiment_dir": experiment_dir,
@@ -87,27 +79,13 @@ class ModelConfig(BaseConfig):
             "checkpoints_dir": lm_specific_dir / "checkpoints",
             "logs_dir": lm_specific_dir / "logs",
             "results_dir": lm_specific_dir / "results",
+            "news_items": self.news_items_path,
+            "val_csv": self.val_csv,
+            "benchmarks_dir": self.benchmarks_dir,
         }
+        if self.model_type == "clean" or self.poison_set:
+            paths["train_csv"] = self.train_csv
 
-        if self.models_dir is not None:
-            models_dir = Path(self.models_dir)
-        else:
-            models_dir = experiment_dir / "models"
-
-        paths["models_dir"] = models_dir
-
-        # Data paths
-        if self.model_type == "clean":
-            paths["train_csv"] = self.data_dir / "train_clean.csv"
-            paths["val_csv"] = self.data_dir / "val_clean.csv"
-        else:
-            paths["train_csv"] = self.data_dir / f"train_{self.model_type}.csv"
-            paths["val_csv"] = self.data_dir / f"val_{self.model_type}.csv"
-
-        # Benchmark path - ADD THIS
-        paths["benchmarks_dir"] = self.benchmark_dir
-
-        # Create directories
         for key in ["checkpoints_dir", "logs_dir", "results_dir"]:
             paths[key].mkdir(parents=True, exist_ok=True)
 
@@ -122,6 +100,9 @@ class ModelConfig(BaseConfig):
         print(f"Dataset: {self.dataset}")
         print(f"Experiment: {self.experiment_name}")
         print(f"Model Type: {self.model_type}")
+        if self.model_type == "poisoned":
+            print(f"Poison Set: {self.poison_set}")
+        print(f"Data Root: {self.data_root}")
         print(f"Language Model: {self.model_name}")
         print(f"  - Use Pretrained: {self.use_pretrained_lm}")
         print(f"  - Fine-tune: {self.fine_tune_lm}")

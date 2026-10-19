@@ -7,17 +7,10 @@ from .analyzers import (
     ExposureAnalyzer,
     TruthDecayAnalyzer,
     FailureAnalyzer,
-    UnlearningAnalyzer,
 )
 
 # Import metrics
-from .metrics import (
-    calculate_auc,
-    calculate_mrr,
-    calculate_ndcg_at_k,
-    calculate_recall_at_k,
-    calculate_mc_at_k,
-)
+from .metrics import query_ranking_metrics, calculate_mc_at_k
 
 __all__ = [
     # Main classes
@@ -29,11 +22,7 @@ __all__ = [
     "ExposureAnalyzer",
     "TruthDecayAnalyzer",
     "FailureAnalyzer",
-    "UnlearningAnalyzer",
     # Metrics
-    "calculate_auc",
-    "calculate_mrr",
-    "calculate_ndcg_at_k",
-    "calculate_recall_at_k",
+    "query_ranking_metrics",
     "calculate_mc_at_k",
 ]

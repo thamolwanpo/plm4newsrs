@@ -84,14 +84,14 @@ class LSTURRecommenderModel(nn.Module):
 
         # Get user IDs
         user_ids = batch.get("user_ids", None)
-        if user_ids is None:
+        if user_ids is None and getattr(self.user_encoder, "use_user_embedding", True):
             raise ValueError("user_ids must be provided in batch for LSTUR")
 
         # Convert to tensor if needed
-        if not torch.is_tensor(user_ids):
-            user_ids = torch.tensor(user_ids, dtype=torch.long)
-
-        user_ids = user_ids.to(history_embeddings.device)
+        if user_ids is not None:
+            if not torch.is_tensor(user_ids):
+                user_ids = torch.tensor(user_ids, dtype=torch.long)
+            user_ids = user_ids.to(history_embeddings.device)
 
         # Get user representation from history and user IDs
         user_embedding = self.user_encoder(history_embeddings=history_embeddings, user_ids=user_ids)

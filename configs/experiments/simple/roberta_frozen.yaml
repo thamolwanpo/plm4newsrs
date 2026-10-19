@@ -10,7 +10,7 @@ fine_tune_lm: false
 
 # Architecture hyperparameters
 max_seq_length: 50
-max_history_length: 5
+max_history_length: 5  # = HISTORY_LEN in fakeun-dataprep
 num_attention_heads: 16
 news_query_vector_dim: 200
 user_query_vector_dim: 200
@@ -25,7 +25,7 @@ early_stopping_patience: 3
 
 # Paths
 base_dir: null
-models_dir: null
+data_root: null  # fakeun-dataprep output for the dataset (default: data/problem2/{dataset})
 
 # Reproducibility
 seed: 42

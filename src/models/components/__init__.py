@@ -6,6 +6,7 @@ from .attention import (
 )
 
 from .encoders import BaseNewsEncoder, BaseUserEncoder, TextEncoder
+from .frozen_lm import FrozenLMCache
 
 from .layers import (
     CNNEncoder,
@@ -26,6 +27,7 @@ __all__ = [
     "BaseNewsEncoder",
     "BaseUserEncoder",
     "TextEncoder",
+    "FrozenLMCache",
     # Layers
     "CNNEncoder",
     "DenseLayer",

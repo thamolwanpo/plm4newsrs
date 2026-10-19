@@ -5,7 +5,7 @@ import torch.nn as nn
 from transformers import AutoModel, AutoConfig
 
 from src.embeddings import load_glove_from_file, SimpleGloVeWrapper, embed_text_with_glove
-from src.models.components import BaseNewsEncoder, AdditiveAttention
+from src.models.components import BaseNewsEncoder, AdditiveAttention, FrozenLMCache
 
 
 class NewsEncoder(BaseNewsEncoder):
@@ -59,10 +59,13 @@ class NewsEncoder(BaseNewsEncoder):
         self.hidden_size = self.lm.config.hidden_size
 
         # Freeze or fine-tune language model
+        self.lm_cache = None
         if not self.config.fine_tune_lm:
             print("Freezing language model parameters")
             for param in self.lm.parameters():
                 param.requires_grad = False
+            # Full token sequences are cached (in fp16) since all tokens are used
+            self.lm_cache = FrozenLMCache(cls_only=False)
         else:
             print("Fine-tuning language model")
 
@@ -167,8 +170,12 @@ class NewsEncoder(BaseNewsEncoder):
             news_embedding: (batch, hidden_size)
         """
         # Get LM representations
-        lm_output = self.lm(input_ids=input_ids, attention_mask=attention_mask)
-        last_hidden_state = lm_output.last_hidden_state  # (batch, seq_len, hidden_size)
+        if self.lm_cache is not None:
+            # Frozen LM: hidden states computed once per article
+            last_hidden_state = self.lm_cache(self.lm, input_ids, attention_mask)
+        else:
+            lm_output = self.lm(input_ids=input_ids, attention_mask=attention_mask)
+            last_hidden_state = lm_output.last_hidden_state  # (batch, seq_len, hidden_size)
 
         if self.store_intermediate_outputs:
             self._store_output("lm_embeddings", last_hidden_state)

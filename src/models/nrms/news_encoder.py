@@ -6,7 +6,7 @@ import torch.nn.functional as F
 from transformers import AutoModel, AutoConfig
 
 from src.embeddings import load_glove_from_file, SimpleGloVeWrapper, embed_text_with_glove
-from src.models.components import BaseNewsEncoder, MultiHeadSelfAttention, AdditiveAttention
+from src.models.components import BaseNewsEncoder, MultiHeadSelfAttention, AdditiveAttention, FrozenLMCache
 
 
 class NRMSNewsEncoder(BaseNewsEncoder):
@@ -88,10 +88,12 @@ class NRMSNewsEncoder(BaseNewsEncoder):
         self.hidden_size = self.lm.config.hidden_size
 
         # Freeze or fine-tune language model (matching original implementation)
+        self.lm_cache = None
         if not self.config.fine_tune_lm:
             print("Freezing language model parameters")
             for param in self.lm.parameters():
                 param.requires_grad = False
+            self.lm_cache = FrozenLMCache(cls_only=True)
         else:
             # Selective layer freezing: freeze all layers except the last N layers
             if hasattr(self.config, 'finetune_layers') and self.config.finetune_layers > 0:
@@ -222,15 +224,19 @@ class NRMSNewsEncoder(BaseNewsEncoder):
         Returns:
             news_embedding: (batch, hidden_size)
         """
-        # Get LM representations
-        lm_output = self.lm(input_ids=input_ids, attention_mask=attention_mask)
-        word_embeddings = lm_output.last_hidden_state  # (batch, seq_len, hidden_size)
+        if self.lm_cache is not None and not self.store_intermediate_outputs:
+            # Frozen LM: [CLS] vectors computed once per article
+            cls_token = self.lm_cache(self.lm, input_ids, attention_mask)
+        else:
+            # Get LM representations
+            lm_output = self.lm(input_ids=input_ids, attention_mask=attention_mask)
+            word_embeddings = lm_output.last_hidden_state  # (batch, seq_len, hidden_size)
 
-        if self.store_intermediate_outputs:
-            self._store_output("lm_embeddings", word_embeddings)
+            if self.store_intermediate_outputs:
+                self._store_output("lm_embeddings", word_embeddings)
 
-        # Extract [CLS] token (matching original BERT implementation)
-        cls_token = word_embeddings[:, 0, :]  # (batch, hidden_size)
+            # Extract [CLS] token (matching original BERT implementation)
+            cls_token = word_embeddings[:, 0, :]  # (batch, hidden_size)
 
         # Apply pooler to [CLS] token
         news_vector = self.pooler(cls_token)  # (batch, hidden_size)

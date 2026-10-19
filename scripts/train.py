@@ -23,17 +23,18 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Train with YAML config
-  python scripts/train.py --config configs/experiments/simple/bert_finetune.yaml
-  
-  # Train with overrides
-  python scripts/train.py --config configs/experiments/naml/naml_bert.yaml --epochs 20 --lr 1e-4
-  
-  # Train all model types (clean, poisoned, etc.)
-  python scripts/train.py --config configs/experiments/simple/bert_finetune.yaml --train-all
-  
-  # Quick start without config file
-  python scripts/train.py --architecture base --model-name bert-base-uncased --dataset politifact
+  # Clean model (stage3/train_clean_model.csv)
+  python scripts/train.py --config configs/experiments/nrms/nrms_glove.yaml --model-type clean
+
+  # One poisoned model (stage4/A_r0.5_s1/train_model.csv)
+  python scripts/train.py --config configs/experiments/nrms/nrms_glove.yaml --poison-set A_r0.5_s1
+
+  # Clean models on three consecutive seeds + every poisoned set found in stage4/
+  python scripts/train.py --config configs/experiments/nrms/nrms_glove.yaml --train-all
+
+  # Point at the fakeun-dataprep output and override hyperparameters
+  python scripts/train.py --config configs/experiments/nrms/nrms_glove.yaml --train-all \\
+      --data-root ../fakeun-dataprep/output/problem2/politifact --epochs 5
         """,
     )
 
@@ -43,7 +44,7 @@ Examples:
     config_group.add_argument(
         "--architecture",
         type=str,
-        choices=["simple", "naml", "nrms"],
+        choices=["simple", "naml", "nrms", "lstur"],
         help="Model architecture (if not using config file)",
     )
 
@@ -54,7 +55,21 @@ Examples:
     parser.add_argument("--dataset", type=str, help="Dataset name (overrides config)")
     parser.add_argument("--experiment-name", type=str, help="Experiment name (overrides config)")
     parser.add_argument(
-        "--model-type", type=str, help="Model type: clean, poisoned, etc. (overrides config)"
+        "--model-type",
+        type=str,
+        choices=["clean", "poisoned"],
+        help="clean (stage3/train_clean_model.csv) or poisoned (stage4/<poison-set>/train_model.csv)",
+    )
+    parser.add_argument(
+        "--poison-set",
+        type=str,
+        help="Poisoned training set, e.g. A_r0.5_s1 (with --model-type poisoned)",
+    )
+    parser.add_argument(
+        "--poison-sets",
+        type=str,
+        nargs="+",
+        help="Poisoned sets trained by --train-all (default: every stage4/A_* folder)",
     )
 
     # ========== Training Options ==========
@@ -75,7 +90,9 @@ Examples:
         "--base-dir", type=str, help="Base directory for experiment (overrides config)"
     )
     parser.add_argument(
-        "--models-dir", type=str, help="Directory containing train/val CSVs (overrides config)"
+        "--data-root",
+        type=str,
+        help="fakeun-dataprep output folder of the dataset, e.g. output/problem2/politifact",
     )
 
     # ========== GloVe Options ==========
@@ -101,7 +118,7 @@ Examples:
     parser.add_argument(
         "--train-all",
         action="store_true",
-        help="Train all model types (clean, poisoned, etc.) found in models_dir",
+        help="Train the clean model on three consecutive seeds, plus one model per poisoned set",
     )
     parser.add_argument("--resume", type=str, help="Path to checkpoint to resume training from")
 
@@ -146,6 +163,11 @@ Examples:
         overrides["experiment_name"] = args.experiment_name
     if args.model_type:
         overrides["model_type"] = args.model_type
+    if args.poison_set:
+        overrides["poison_set"] = args.poison_set
+        overrides.setdefault("model_type", "poisoned")
+    if args.poison_sets:
+        overrides["poison_sets"] = args.poison_sets
 
     # Training options
     if args.epochs:
@@ -162,8 +184,8 @@ Examples:
     # Path options
     if args.base_dir:
         overrides["base_dir"] = Path(args.base_dir)
-    if args.models_dir:
-        overrides["models_dir"] = Path(args.models_dir)
+    if args.data_root:
+        overrides["data_root"] = Path(args.data_root)
 
     # GloVe options
     if args.glove_path:
@@ -183,8 +205,15 @@ Examples:
     if overrides:
         if args.verbose:
             print(f"\nApplying overrides: {overrides}")
+        if "dataset" in overrides:
+            # Re-derive default paths that were based on the old dataset name
+            if config.base_dir == Path(f"./outputs/{config.dataset}"):
+                config.base_dir = None
+            if config.data_root == Path(f"data/problem2/{config.dataset}"):
+                config.data_root = None
         for key, value in overrides.items():
             setattr(config, key, value)
+        config.__post_init__()
 
     # ========== Setup Device ==========
     if args.cpu:
@@ -225,8 +254,8 @@ Examples:
             print("\n" + "=" * 70)
             print("TRAINING SUMMARY")
             print("=" * 70)
-            for model_type, checkpoint_path in trained_models.items():
-                print(f"✅ {model_type}: {checkpoint_path}")
+            for run_name, checkpoint_path in trained_models.items():
+                print(f"✅ {run_name}: {checkpoint_path}")
 
         else:
             print("\n" + "=" * 70)

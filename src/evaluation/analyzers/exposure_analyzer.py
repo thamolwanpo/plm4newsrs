@@ -265,8 +265,7 @@ class ExposureAnalyzer(BaseAnalyzer):
             >>> analyzer = ExposureAnalyzer(results_dir)
             >>> comparison = analyzer.compare_models({
             ...     'clean': clean_df,
-            ...     'poisoned': poisoned_df,
-            ...     'unlearned': unlearned_df
+            ...     'poisoned_A_r0.5_s1': poisoned_df,
             ... }, top_k=10)
         """
         comparison_data = []

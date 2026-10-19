@@ -45,18 +45,6 @@ def _collate_transformer(batch):
     if "user_ids" in batch[0]:
         user_ids = torch.stack([item["user_ids"] for item in batch])
 
-    # Check for "all negative" cases (label = -1)
-    has_no_positive = labels == -1
-
-    if has_no_positive.any():
-        # For samples with no positive, assign random target
-        # This makes the model learn uniform distribution over candidates
-        for i in range(len(labels)):
-            if labels[i] == -1:
-                # Random candidate index
-                num_candidates = candidate_input_ids.shape[1]
-                labels[i] = torch.randint(0, num_candidates, (1,)).item()
-
     result = {
         "candidate_input_ids": candidate_input_ids,
         "candidate_attention_mask": candidate_attention_mask,
@@ -88,15 +76,6 @@ def _collate_glove(batch):
     user_ids = None
     if "user_ids" in batch[0]:
         user_ids = torch.stack([item["user_ids"] for item in batch])
-
-    # Handle "all negative" cases
-    has_no_positive = labels == -1
-
-    if has_no_positive.any():
-        for i in range(len(labels)):
-            if labels[i] == -1:
-                num_candidates = len(candidate_texts[i])
-                labels[i] = torch.randint(0, num_candidates, (1,)).item()
 
     # Create device indicator for GloVe
     device_indicator = torch.zeros(1, dtype=torch.float32)

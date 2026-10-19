@@ -6,7 +6,13 @@ import torch.nn.functional as F
 from transformers import AutoModel, AutoConfig
 
 from src.embeddings import load_glove_from_file, SimpleGloVeWrapper, embed_text_with_glove
-from src.models.components import BaseNewsEncoder, CNNEncoder, AdditiveAttention, CategoryEncoder
+from src.models.components import (
+    BaseNewsEncoder,
+    CNNEncoder,
+    AdditiveAttention,
+    CategoryEncoder,
+    FrozenLMCache,
+)
 
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -42,10 +48,12 @@ class BERTTextEncoder(nn.Module):
         self.bert = bert
 
         # Freeze or fine-tune language model (matching original implementation)
+        self.lm_cache = None
         if not self.config.fine_tune_lm:
             print("Freezing language model parameters")
             for param in self.bert.parameters():
                 param.requires_grad = False
+            self.lm_cache = FrozenLMCache(cls_only=True)
         else:
             # Selective layer freezing: freeze all layers except the last N layers
             if hasattr(self.config, 'finetune_layers') and self.config.finetune_layers > 0:
@@ -107,11 +115,12 @@ class BERTTextEncoder(nn.Module):
         else:
             raise ValueError(f"Expected 2D or 3D input, got {text.dim()}D tensor")
 
-        # Get all token embeddings
-        text_vector = self.bert(**news_input)[0]  # (batch, seq_len, hidden_dim)
-
-        # Extract [CLS] token
-        text_vector = text_vector[:, 0]  # (batch, hidden_dim)
+        if self.lm_cache is not None:
+            # Frozen BERT: [CLS] vectors computed once per article
+            text_vector = self.lm_cache(self.bert, **news_input)  # (batch, hidden_dim)
+        else:
+            # Get all token embeddings, then the [CLS] token
+            text_vector = self.bert(**news_input)[0][:, 0]  # (batch, hidden_dim)
 
         # Apply pooler
         text_vector = self.pooler(text_vector)  # (batch, hidden_dim)

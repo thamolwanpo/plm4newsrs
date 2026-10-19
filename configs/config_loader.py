@@ -1,35 +1,28 @@
 """Configuration loading utilities."""
 
+from dataclasses import fields
 from pathlib import Path
 from typing import Union
+import warnings
 import yaml
 
 from .config_registry import get_config_class
 from .base_config import BaseConfig
-from .unlearning.base_unlearning import BaseUnlearningConfig
-from .unlearning.methods.first_order_config import FirstOrderConfig
-from .unlearning.methods.gradient_ascent_config import GradientAscentConfig
 
 
-# Mapping of method names to config classes
-UNLEARNING_CONFIG_REGISTRY = {
-    "first_order": FirstOrderConfig,
-    "gradient_ascent": GradientAscentConfig,
-}
+# Keys from the old data layout; ignored (with a warning) so old YAMLs still load.
+DEPRECATED_KEYS = {"models_dir", "data_dir", "benchmark_dir"}
 
 
 def load_config(config_path: Union[str, Path]) -> BaseConfig:
-    """
-    Load model configuration from YAML file.
-    (Existing function - unchanged)
-    """
+    """Load model configuration from YAML file."""
     config_path = Path(config_path)
 
     if not config_path.exists():
         raise FileNotFoundError(f"Config file not found: {config_path}")
 
     with open(config_path, "r") as f:
-        config_dict = yaml.safe_load(f)
+        config_dict = yaml.safe_load(f) or {}
 
     # Get architecture type
     architecture = config_dict.get("architecture", "simple")
@@ -37,71 +30,21 @@ def load_config(config_path: Union[str, Path]) -> BaseConfig:
     # Get appropriate config class
     config_class = get_config_class(architecture)
 
-    # Convert path strings to Path objects
-    if "base_dir" in config_dict and config_dict["base_dir"] is not None:
-        config_dict["base_dir"] = Path(config_dict["base_dir"])
-    if "models_dir" in config_dict and config_dict["models_dir"] is not None:
-        config_dict["models_dir"] = Path(config_dict["models_dir"])
+    for key in DEPRECATED_KEYS & set(config_dict):
+        value = config_dict.pop(key)
+        if value is not None:
+            warnings.warn(
+                f"'{key}' is no longer used (got {value!r}); set 'data_root' to the "
+                "fakeun-dataprep output folder of the dataset instead."
+            )
 
-    return config_class(**config_dict)
-
-
-def load_unlearning_config(config_path: Union[str, Path]) -> BaseUnlearningConfig:
-    """
-    Load unlearning configuration from YAML file.
-
-    Automatically selects the correct config class based on 'method' field.
-
-    Args:
-        config_path: Path to YAML config file
-
-    Returns:
-        Unlearning config instance (InfluenceConfig, etc.)
-
-    Example:
-        >>> config = load_unlearning_config("configs/experiments/unlearning/influence.yaml")
-        >>> print(config.method)  # "influence"
-        >>> print(config.learning_rate)  # 1e-5
-    """
-    config_path = Path(config_path)
-
-    if not config_path.exists():
-        raise FileNotFoundError(f"Unlearning config not found: {config_path}")
-
-    with open(config_path, "r") as f:
-        config_dict = yaml.safe_load(f)
-
-    # Get method name
-    method = config_dict.get("method", "influence")
-
-    # Get appropriate config class
-    if method not in UNLEARNING_CONFIG_REGISTRY:
-        raise ValueError(
-            f"Unknown unlearning method: {method}. "
-            f"Available: {list(UNLEARNING_CONFIG_REGISTRY.keys())}"
-        )
-
-    config_class = UNLEARNING_CONFIG_REGISTRY[method]
+    unknown = set(config_dict) - {f.name for f in fields(config_class)}
+    if unknown:
+        raise ValueError(f"Unknown config keys in {config_path}: {sorted(unknown)}")
 
     # Convert path strings to Path objects
-    path_fields = ["forget_set_path", "retain_set_path", "unlearning_splits_dir", "output_dir"]
-
-    for field in path_fields:
-        if field in config_dict and config_dict[field] is not None:
-            config_dict[field] = Path(config_dict[field])
+    for key in ("base_dir", "data_root"):
+        if config_dict.get(key) is not None:
+            config_dict[key] = Path(config_dict[key])
 
     return config_class(**config_dict)
-
-
-def register_unlearning_config(method_name: str, config_class: type):
-    """
-    Register a new unlearning config class.
-
-    Args:
-        method_name: Name of the unlearning method
-        config_class: Config class for the method
-
-    Example:
-        >>> register_unlearning_config("my_method", MyMethodConfig)
-    """
-    UNLEARNING_CONFIG_REGISTRY[method_name] = config_class

@@ -14,7 +14,7 @@ finetune_layers: 0  # Number of last layers to fine-tune (BERT-base has 12 layer
 
 # Architecture hyperparameters
 max_seq_length: 30
-max_history_length: 30
+max_history_length: 5  # = HISTORY_LEN in fakeun-dataprep
 
 # Multi-head self-attention (for news encoder)
 num_attention_heads: 16
@@ -27,14 +27,14 @@ drop_rate: 0.2
 
 # Training hyperparameters
 epochs: 3
-train_batch_size: 16
+train_batch_size: 32
 val_batch_size: 32
 learning_rate: 2.0e-5
 early_stopping_patience: 3
 
 # Paths
 base_dir: null
-models_dir: null
+data_root: '/home/thamolwan/Documents/P2/data/gossipcop'  # fakeun-dataprep output for the dataset (default: data/problem2/{dataset})
 
 # Reproducibility
 seed: 42

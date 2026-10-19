@@ -2,175 +2,102 @@
 
 import torch
 from pathlib import Path
-import pandas as pd
-import ast
 from torch.utils.data import Dataset
 from typing import Optional, Dict, Any, List
-import json
 
 from configs.models.simple_config import ModelConfig
-from .preprocessing import convert_pairwise_to_listwise
+from .preprocessing import (
+    load_news_items,
+    pad_history,
+    read_model_csv,
+    to_groups,
+)
 
 
 class BaseNewsDataset(Dataset):
-    """Base dataset class for news recommendation."""
+    """Base dataset for training/validation files (``*_model.csv``).
+
+    Each sample is one K+1 group: the positive candidate first, followed by
+    exactly ``config.num_negatives`` negatives, and a history left-padded to
+    ``config.max_history_length``.
+    """
 
     def __init__(
-        self, csv_path: Path, config: ModelConfig, user_map: Optional[Dict[Any, int]] = None
+        self, csv_path: Path, config: ModelConfig, user_map: Optional[Dict[str, int]] = None
     ):
         """
         Args:
-            csv_path: Path to CSV file (pairwise format)
+            csv_path: Path to a 7-column model CSV
             config: Model configuration
+            user_map: user_id -> index map (required for LSTUR)
         """
-        print(f"Loading dataset from: {csv_path}")
-        pairwise_df = pd.read_csv(csv_path)
-        print(f"  Pairwise samples: {len(pairwise_df)}")
-
-        self.df = convert_pairwise_to_listwise(pairwise_df, config)
-        print(f"  Listwise samples: {len(self.df)}")
-
         self.config = config
 
-        # Load news_items.csv for text lookup
-        news_items_path = config.data_dir / "news_items.csv"
-        news_items_path = Path(str(news_items_path).replace("/models/", "/"))
-        print(f"Loading news items from: {news_items_path}")
-        self.news_items = pd.read_csv(news_items_path, index_col="item_id")
-        print(f"  Loaded {len(self.news_items)} news items")
+        print(f"Loading dataset from: {csv_path}")
+        pairwise_df = read_model_csv(csv_path)
+        print(f"  Rows: {len(pairwise_df)}")
 
-        # Build user ID mapping if using LSTUR
+        groups = to_groups(pairwise_df)
+        self.df = self._fix_group_sizes(groups)
+        print(f"  Groups: {len(self.df)} (dropped {len(groups) - len(self.df)} without negatives)")
+
+        print(f"Loading news items from: {config.news_items_path}")
+        self.news_texts, self.news_titles = load_news_items(config.news_items_path)
+        print(f"  Loaded {len(self.news_titles) - 1} news items")
+
         self.use_lstur = config.architecture == "lstur"
-        self.user_to_idx = None
+        self.user_to_idx = user_map
+        if self.use_lstur and self.user_to_idx is None:
+            raise ValueError("LSTUR datasets need a user_map (see build_user_map)")
 
-        if self.use_lstur:
-            # Determine path for the persistent map file
-            self.user_map_path = self.config.data_dir / "user_to_idx_map.json"
+    def _fix_group_sizes(self, groups):
+        """Give every group exactly 1 positive + num_negatives negatives.
 
-            if user_map is not None:
-                # 1. Use injected map (for subsets/evaluation)
-                self.user_to_idx = user_map
-                print(f"  Using injected user mapping: {len(self.user_to_idx)} entries")
-            elif self.user_map_path.exists():
-                # 2. Load existing map (for validation/evaluation)
-                print(f"  Loading existing user mapping from: {self.user_map_path}")
-                with open(self.user_map_path, "r") as f:
-                    raw_map = json.load(f)
-                    # Convert keys from JSON (strings) back to original type (int or str)
-                    self.user_to_idx = {self._convert_key(k): v for k, v in raw_map.items()}
-                print(f"  Loaded {len(self.user_to_idx)} user entries.")
-            else:
-                # 3. Build and save new map (for initial training set)
-                self._build_user_mapping()
-                self._save_user_mapping()
-
-    def _convert_key(self, key):
-        """Helper to convert string keys from JSON back to original type (int or str)."""
-        try:
-            return int(key)
-        except ValueError:
-            return key
-
-    def _save_user_mapping(self):
-        """Saves the built user mapping to a JSON file."""
-        if self.user_to_idx is not None and self.user_map_path is not None:
-            # Ensure keys are serializable (JSON keys must be strings)
-            serializable_map = {str(k): v for k, v in self.user_to_idx.items()}
-            self.user_map_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(self.user_map_path, "w") as f:
-                json.dump(serializable_map, f)
-            print(f"  ✅ Saved user mapping to: {self.user_map_path}")
-
-    def _build_user_mapping(self):
-        """Build mapping from user_id to index for embedding lookup."""
-        # Ensure user_id keys are consistent (convert to int if possible)
-        unique_users = self.df["user_id"].unique()
-        cleaned_users = [int(u) if str(u).isdigit() else u for u in unique_users]
-        self.user_to_idx = {user_id: idx + 1 for idx, user_id in enumerate(cleaned_users)}
-        self.user_to_idx[0] = 0  # Reserve index 0 for unknown users
-        print(f"  Built dynamic user mapping: {len(unique_users)} unique users")
+        Groups short of negatives (rare: tiny candidate universe) reuse their
+        own negatives cyclically; groups without any negative are dropped.
+        """
+        k = self.config.num_negatives
+        fixed = []
+        for imps in groups["impressions"]:
+            pos = [x for x in imps if x[2] == 1][:1]
+            negs = [x for x in imps if x[2] == 0]
+            if not pos or not negs:
+                fixed.append(None)
+                continue
+            fixed.append(pos + [negs[i % len(negs)] for i in range(k)])
+        groups = groups.assign(impressions=fixed)
+        return groups[groups["impressions"].notna()].reset_index(drop=True)
 
     def _get_user_idx(self, user_id: str) -> int:
-        """Get user index for embedding lookup."""
+        """User index for embedding lookup (0 = unknown user / not LSTUR)."""
         if not self.use_lstur:
             return 0
-
-        # Try to convert to appropriate type
-        try:
-            # Handle different user_id formats
-            if isinstance(user_id, str):
-                # Try to parse as int if it looks like a number
-                try:
-                    user_id = int(user_id)
-                except ValueError:
-                    pass
-        except:
-            pass
-
-        # Return mapped index, default to 0 (UNK) if not found
-        return self.user_to_idx.get(user_id, 0)
+        return self.user_to_idx.get(str(user_id), 0)
 
     def __len__(self):
         return len(self.df)
 
     def _get_text_by_id(self, item_id: str) -> str:
-        """Lookup text by item_id from news_items.csv."""
-        try:
-            return self.news_items.loc[item_id, "text"]
-        except KeyError:
-            # Fallback to title if text not found
-            return self.news_items.loc[item_id, "title"]
+        return self.news_texts.get(item_id, self.news_titles.get(item_id, ""))
 
     def _get_title_by_id(self, item_id: str) -> str:
-        """Lookup title by item_id from news_items.csv."""
-        return self.news_items.loc[item_id, "title"]
+        return self.news_titles.get(item_id, "")
 
     def _parse_impressions(self, idx: int) -> tuple:
-        """Parse impressions and sort by label."""
-        row = self.df.iloc[idx]
-        impressions = row["impressions"]
-
-        # Sort so positives come first
-        impressions.sort(key=lambda x: x[2], reverse=True)
-
-        # Extract candidate texts, titles and other info
+        """Candidates of one group (positive is always at index 0)."""
+        impressions = self.df.iloc[idx]["impressions"]
         candidate_ids = [info[0] for info in impressions]
-        candidate_titles = [info[1] for info in impressions]
-        candidate_texts = [self._get_text_by_id(item_id) for item_id in candidate_ids]
-        labels = [info[2] for info in impressions]
-
-        # Check if there are any positives
-        has_positive = any(lbl == 1 for lbl in labels)
-
-        if has_positive:
-            # Normal case: label points to first positive (position 0)
-            label = 0
-        else:
-            # All negatives case (corrected set): use -1 as sentinel
-            # Or use a random candidate (to force uniform distribution)
-            label = -1  # Special marker for "no positive"
-
-        return candidate_texts, candidate_titles, candidate_ids, labels, label, has_positive
+        candidate_titles = [self._get_title_by_id(i) for i in candidate_ids]
+        candidate_texts = [self._get_text_by_id(i) for i in candidate_ids]
+        return candidate_texts, candidate_titles
 
     def _parse_history(self, idx: int) -> tuple:
-        """Parse history and return both text and titles."""
-        row = self.df.iloc[idx]
-
-        try:
-            history_ids = ast.literal_eval(row["history_ids"])
-        except (ValueError, SyntaxError):
-            history_ids = row["history_ids"]
-
-        if not isinstance(history_ids, list):
-            history_ids = [str(history_ids)]
-
-        # Truncate to max history length
-        history_ids = history_ids[: self.config.max_history_length]
-
-        # Lookup text and title for each history item
-        history_texts = [self._get_text_by_id(item_id) for item_id in history_ids]
-        history_titles = [self._get_title_by_id(item_id) for item_id in history_ids]
-
+        """History texts and titles, left-padded to max_history_length."""
+        history_ids = pad_history(
+            self.df.iloc[idx]["history_ids"], self.config.max_history_length
+        )
+        history_texts = [self._get_text_by_id(i) for i in history_ids]
+        history_titles = [self._get_title_by_id(i) for i in history_ids]
         return history_texts, history_titles
 
 
@@ -187,13 +114,14 @@ class NewsDataset(BaseNewsDataset):
         csv_path: Path,
         config: ModelConfig,
         tokenizer: Optional[Any] = None,
-        user_map: Optional[Dict[Any, int]] = None,
+        user_map: Optional[Dict[str, int]] = None,
     ):
         """
         Args:
-            csv_path: Path to CSV file (pairwise format)
+            csv_path: Path to a 7-column model CSV
             config: Model configuration
             tokenizer: HuggingFace tokenizer (None for GloVe)
+            user_map: user_id -> index map (required for LSTUR)
         """
         super().__init__(csv_path, config, user_map=user_map)
 
@@ -224,15 +152,11 @@ class NewsDataset(BaseNewsDataset):
                           history_input_ids, history_attention_mask,
                           history_title_input_ids, history_title_attention_mask, label, user_ids
         """
-        candidate_texts, candidate_titles, candidate_ids, labels, label, has_positive = (
-            self._parse_impressions(idx)
-        )
+        candidate_texts, candidate_titles = self._parse_impressions(idx)
         history_texts, history_titles = self._parse_history(idx)
 
-        # Get user ID
-        row = self.df.iloc[idx]
-        user_id = row["user_id"]
-        user_idx = self._get_user_idx(user_id)
+        user_idx = self._get_user_idx(self.df.iloc[idx]["user_id"])
+        label = 0  # the positive is always the first candidate
 
         if self.use_glove:
             return self._get_glove_item(
@@ -259,8 +183,17 @@ class NewsDataset(BaseNewsDataset):
             "history_texts": history_texts,  # List of strings
             "history_titles": history_titles,  # List of strings
             "label": torch.tensor(label, dtype=torch.long),
-            "user_ids": torch.tensor(user_idx, dtype=torch.long),  # Add user ID
+            "user_ids": torch.tensor(user_idx, dtype=torch.long),
         }
+
+    def _tokenize(self, texts: List[str]):
+        return self.tokenizer(
+            texts,
+            max_length=self.config.max_seq_length,
+            padding="max_length",
+            truncation=True,
+            return_tensors="pt",
+        )
 
     def _get_transformer_item(
         self,
@@ -272,41 +205,10 @@ class NewsDataset(BaseNewsDataset):
         user_idx: int,
     ) -> Dict[str, Any]:
         """Get item for Transformer models (tokenized)."""
-        # Tokenize candidate texts
-        candidate_text_inputs = self.tokenizer(
-            candidate_texts,
-            max_length=self.config.max_seq_length,
-            padding="max_length",
-            truncation=True,
-            return_tensors="pt",
-        )
-
-        # Tokenize candidate titles
-        candidate_title_inputs = self.tokenizer(
-            candidate_titles,
-            max_length=self.config.max_seq_length,
-            padding="max_length",
-            truncation=True,
-            return_tensors="pt",
-        )
-
-        # Tokenize history texts
-        history_text_inputs = self.tokenizer(
-            history_texts,
-            max_length=self.config.max_seq_length,
-            padding="max_length",
-            truncation=True,
-            return_tensors="pt",
-        )
-
-        # Tokenize history titles
-        history_title_inputs = self.tokenizer(
-            history_titles,
-            max_length=self.config.max_seq_length,
-            padding="max_length",
-            truncation=True,
-            return_tensors="pt",
-        )
+        candidate_text_inputs = self._tokenize(candidate_texts)
+        candidate_title_inputs = self._tokenize(candidate_titles)
+        history_text_inputs = self._tokenize(history_texts)
+        history_title_inputs = self._tokenize(history_titles)
 
         return {
             "candidate_input_ids": candidate_text_inputs["input_ids"],
@@ -318,5 +220,5 @@ class NewsDataset(BaseNewsDataset):
             "history_title_input_ids": history_title_inputs["input_ids"],
             "history_title_attention_mask": history_title_inputs["attention_mask"],
             "label": torch.tensor(label, dtype=torch.long),
-            "user_ids": torch.tensor(user_idx, dtype=torch.long),  # Add user ID
+            "user_ids": torch.tensor(user_idx, dtype=torch.long),
         }
