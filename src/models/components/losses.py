@@ -24,3 +24,23 @@ def per_interaction_bce(scores: torch.Tensor, labels: torch.Tensor):
     probs = torch.sigmoid(scores)
     confidence = torch.where(targets == 1, probs, 1 - probs)
     return per_sample_loss, confidence
+
+
+def per_group_softmax(scores: torch.Tensor, labels: torch.Tensor):
+    """Softmax metrics of every K+1 group, matching the cross-entropy objective.
+
+    Args:
+        scores: Candidate logits [batch, K+1]
+        labels: Index of the positive candidate [batch]
+
+    Returns:
+        loss: Cross-entropy of each group [batch] (reduction='none')
+        confidence: Softmax probability of the positive [batch]
+        el2n: L2 norm of (softmax - one-hot label) over the group [batch]
+    """
+    loss = F.cross_entropy(scores, labels, reduction="none")
+    probs = torch.softmax(scores, dim=1)
+    confidence = probs.gather(1, labels.unsqueeze(1)).squeeze(1)
+    targets = F.one_hot(labels, num_classes=scores.size(1)).to(scores.dtype)
+    el2n = torch.linalg.vector_norm(probs - targets, dim=1)
+    return loss, confidence, el2n

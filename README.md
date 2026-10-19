@@ -322,7 +322,17 @@ dyn = torch.load(".../results/clean_training_dynamics.pt")
 dyn["per_instance_loss"]  # {sample_id: [bce_ep1, bce_ep2, ...]}, BCE of sigmoid(score) vs label
 dyn["c_proxy"]            # {sample_id: confidence in the true class, averaged over epochs}
 dyn["el2n"]               # {sample_id: |sigmoid(score) - label|}, eval pass after epoch 1
+
+# Softmax over the K+1 candidates (= the cross-entropy training objective),
+# one entry per group, keyed by the positive's sample_id:
+dyn["per_group_ce_loss"]  # {sample_id: [ce_ep1, ce_ep2, ...]}
+dyn["softmax_c_proxy"]    # {sample_id: softmax probability of the positive, averaged over epochs}
+dyn["softmax_el2n"]       # {sample_id: ||softmax - one-hot label||_2}, eval pass after epoch 1
 ```
+
+The first three treat each candidate score as an independent click logit, so
+they cover negatives too but also move with the overall score level, which the
+cross-entropy objective does not constrain.
 
 Negatives reused to fill a short group are not counted twice.
 

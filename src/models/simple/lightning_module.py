@@ -3,8 +3,6 @@ import torch.nn as nn
 import lightning as pl
 import torchmetrics
 
-from src.models.components.losses import per_interaction_bce
-
 from .recommender import RecommenderModel
 
 
@@ -44,9 +42,8 @@ class LitRecommender(pl.LightningModule):
 
         Returns:
             Dict with the training loss (cross-entropy over the K+1 candidates,
-            used for backward) and the per-interaction BCE and true-class
-            confidence [batch, K+1] of the same scores, recorded by the
-            TrainingDynamicsTracker callback.
+            used for backward) and the detached scores [batch, K+1], from which
+            the TrainingDynamicsTracker callback computes the training dynamics.
         """
         if batch is None:
             return None
@@ -60,13 +57,10 @@ class LitRecommender(pl.LightningModule):
         scores = self(batch)
         loss = self.loss_fn(scores, labels)
 
-        # Training dynamics from this same forward pass (no gradient)
-        per_sample_loss, confidence = per_interaction_bce(scores.detach(), labels)
-
         # Log metrics
         self.log("train_loss", loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
 
-        return {"loss": loss, "per_sample_loss": per_sample_loss, "confidence": confidence}
+        return {"loss": loss, "scores": scores.detach()}
 
     def validation_step(self, batch, batch_idx):
         """
