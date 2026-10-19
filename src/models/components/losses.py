@@ -9,6 +9,7 @@ def per_interaction_bce(scores: torch.Tensor, labels: torch.Tensor):
 
     Each candidate score is treated as an independent click logit: the
     candidate at the label index is the positive (1), all others are 0.
+    Used for the training dynamics only; the training loss is cross-entropy.
 
     Args:
         scores: Candidate logits [batch, K+1]
