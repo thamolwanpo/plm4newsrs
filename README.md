@@ -307,7 +307,8 @@ python scripts/train.py --config configs/experiments/nrms/nrms_glove.yaml --pois
 | `--dataset`, `--epochs`, `--lr`, `--batch-size`, `--seed` | Overrides |
 
 The final-epoch checkpoint is saved to
-`{base_dir}/{experiment_name}/{lm_folder}/checkpoints/{run_name}-last.ckpt`.
+`{base_dir}/{experiment_name}/{lm_folder}/checkpoints/{run_name}-last.ckpt`, and
+the epoch with the highest `val_auc` to `{run_name}-best.ckpt` (the one evaluated).
 Clean models also keep every epoch as `{run_name}-epoch=NN-val_auc=X.XXXX.ckpt`
 (`NN` 0-based); each is evaluated as its own model, `{run_name}_epochNN`.
 LSTUR models also save `{run_name}_user_map.json` next to it (the users of
@@ -344,7 +345,7 @@ all_ckpts = train_all_models(config)   # {"clean_seed42": ..., "clean_seed43": .
 ## Evaluation
 
 ```bash
-# Every trained model (last checkpoint each, plus every epoch of clean models) on every stage6 benchmark
+# Every trained model (best checkpoint each, plus every epoch of clean models) on every stage6 benchmark
 python scripts/evaluate.py --config configs/experiments/nrms/nrms_glove.yaml --generate-report
 
 # Some models / benchmarks, metrics only
@@ -490,8 +491,9 @@ evaluator.run_analyses(benchmark="standard")
 The evaluation CLI runs exposure analysis on `standard`, `standard_clean`, and
 `standard_mixed` by default. Other analyses continue to run on the selected
 `--analysis-benchmark` (default: `standard`).
-Training saves and evaluation prefers the final epoch checkpoint (`*-last.ckpt`);
-existing runs without one continue to use their best-validation-AUC checkpoint.
+Evaluation prefers the best-`val_auc` checkpoint (`*-best.ckpt`), then the final
+epoch checkpoint (`*-last.ckpt`); older runs without either use their
+best-validation-AUC checkpoint.
 Clean models' per-epoch checkpoints are evaluated too (`clean_seed42_epoch03`, ...;
 `epoch` column of `evaluation_summary.csv`).
 

@@ -135,7 +135,8 @@ class ModelEvaluator:
     # Discovery
     # ------------------------------------------------------------------ #
     def discover_models(self, model_names: Optional[List[str]] = None) -> Dict[str, Path]:
-        """Last-epoch checkpoint per model, falling back to best legacy checkpoint.
+        """Best-val_auc checkpoint (``-best``) per model, else last-epoch (``-last``),
+        else best legacy checkpoint.
 
         Clean models additionally contribute every per-epoch checkpoint, as
         "<run name>_epoch<NN>" models.
@@ -147,12 +148,12 @@ class ModelEvaluator:
         selected: Dict[str, Tuple[int, float, Path]] = {}
         epoch_models: Dict[str, Path] = {}
         for path in sorted(self.paths["checkpoints_dir"].glob("*.ckpt")):
-            is_last = path.stem.endswith("-last")
+            is_last = path.stem.endswith(("-last", "-best"))
             if is_last:
                 run = path.stem[:-5]
                 if run.endswith("-resumed"):
                     run = run[: -len("-resumed")]
-                rank = (1, path.stat().st_mtime)
+                rank = (2 if path.stem.endswith("-best") else 1, path.stat().st_mtime)
             else:
                 match = CKPT_PATTERN.match(path.stem)
                 run, auc = (
@@ -248,7 +249,7 @@ class ModelEvaluator:
         """Load one checkpoint and evaluate it on its benchmark plan."""
         model_path = Path(model_path)
         if run_name is None:
-            if model_path.stem.endswith("-last"):
+            if model_path.stem.endswith(("-last", "-best")):
                 run_name = model_path.stem[:-5]
                 if run_name.endswith("-resumed"):
                     run_name = run_name[: -len("-resumed")]

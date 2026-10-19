@@ -116,8 +116,10 @@ class LitNRMSRecommender(pl.LightningModule):
         self.val_auc.reset()
 
     def configure_optimizers(self):
-        """Configure optimizer."""
-        return torch.optim.Adam(self.parameters(), lr=self.config.learning_rate)
+        """Configure optimizer (AdamW; identical to Adam when weight_decay is 0)."""
+        return torch.optim.AdamW(
+            self.parameters(), lr=self.config.learning_rate, weight_decay=self.config.weight_decay
+        )
 
     def predict_step(self, batch, batch_idx):
         """

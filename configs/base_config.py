@@ -39,6 +39,7 @@ class BaseConfig:
     train_batch_size: int = 16
     val_batch_size: int = 32
     learning_rate: float = 1e-5
+    weight_decay: float = 0.0  # AdamW decoupled decay (LSTUR: Adam L2 on non-embedding params)
     early_stopping_patience: int = 3
     # Negatives per positive in training/validation groups (dataprep K)
     num_negatives: int = 4

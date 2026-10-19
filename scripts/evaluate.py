@@ -2,7 +2,7 @@
 """
 CLI for evaluating news recommendation models on the stage6 benchmarks.
 
-For every trained model (last-epoch checkpoint per model, when available, plus
+For every trained model (best-val_auc checkpoint per model, else last-epoch, plus
 every per-epoch checkpoint of clean models as "<run>_epochNN") it evaluates:
   standard, standard_clean, standard_mixed, adversarial,
   pattern_probe(_realneg), poison_probe(_realneg)
