@@ -83,7 +83,9 @@ def load_news_items(news_items_path: Union[str, Path]) -> Tuple[Dict[str, str], 
 
 
 def to_groups(
-    df_pairwise: pd.DataFrame, target_filter: Optional[Set[str]] = None
+    df_pairwise: pd.DataFrame,
+    target_filter: Optional[Set[str]] = None,
+    with_row_ids: bool = False,
 ) -> pd.DataFrame:
     """Convert the row-per-candidate format into one row per K+1 group.
 
@@ -91,20 +93,23 @@ def to_groups(
         df_pairwise: 7-column frame (see read_model_csv).
         target_filter: if given, keep only groups whose positive candidate id
             is in this set (e.g. a poisoned set's injected fake items).
+        with_row_ids: if True, append each row's 0-based position in the CSV
+            to its impression tuple. It uniquely identifies the interaction.
 
     Returns:
         DataFrame with columns user_id, history_ids (list), impressions, where
         impressions is a list of (candidate_id, title, label, is_fake) tuples
-        with the positive first.
+        (plus row_id with ``with_row_ids``) with the positive first.
     """
     df = df_pairwise.reset_index(drop=True)
     group = (df["label"] == 1).cumsum()
     df = df[group > 0]  # rows before the first positive belong to no group
     group = group[group > 0]
 
-    impressions = list(
-        zip(df["candidate_id"], df["candidate_title"], df["label"], df["candidate_is_fake"])
-    )
+    columns = [df["candidate_id"], df["candidate_title"], df["label"], df["candidate_is_fake"]]
+    if with_row_ids:
+        columns.append(df.index)
+    impressions = list(zip(*columns))
     grouped = (
         pd.DataFrame({"g": group.to_numpy(), "imp": impressions})
         .groupby("g", sort=True)["imp"]

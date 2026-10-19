@@ -311,6 +311,20 @@ The best checkpoint (by `val_auc`) is saved to
 LSTUR models also save `{run_name}_user_map.json` next to it (the users of
 that training set; unseen users get the "unknown user" embedding).
 
+Training uses a per-interaction binary cross-entropy (each candidate score is
+a click logit; the mean is used for backward). Every run also saves its
+training dynamics to `{lm_folder}/results/{run_name}_training_dynamics.pt`,
+keyed by sample id = 0-based row of the training CSV:
+
+```python
+dyn = torch.load(".../results/clean_training_dynamics.pt")
+dyn["per_instance_loss"]  # {sample_id: [loss_ep1, loss_ep2, ...]}  (training forward pass)
+dyn["c_proxy"]            # {sample_id: confidence in the true class, averaged over epochs}
+dyn["el2n"]               # {sample_id: |sigmoid(score) - label|}, eval pass after epoch 1
+```
+
+Negatives reused to fill a short group are not counted twice.
+
 ### Programmatic
 
 ```python

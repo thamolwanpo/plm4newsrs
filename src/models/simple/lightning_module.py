@@ -1,7 +1,8 @@
 import torch
-import torch.nn as nn
 import lightning as pl
 import torchmetrics
+
+from src.models.components.losses import per_interaction_bce
 
 from .recommender import RecommenderModel
 
@@ -23,7 +24,6 @@ class LitRecommender(pl.LightningModule):
 
         self.config = config
         self.model = RecommenderModel(config)
-        self.loss_fn = nn.CrossEntropyLoss()
 
         # Metrics
         self.val_auc = torchmetrics.AUROC(task="binary")
@@ -41,7 +41,9 @@ class LitRecommender(pl.LightningModule):
             batch_idx: Index of batch
 
         Returns:
-            loss: Training loss
+            Dict with the mean training loss (used for backward) and the
+            detached per-interaction loss and confidence [batch, K+1],
+            recorded by the TrainingDynamicsTracker callback.
         """
         if batch is None:
             return None
@@ -53,12 +55,17 @@ class LitRecommender(pl.LightningModule):
         # Get predictions and compute loss
         labels = batch["label"]
         scores = self(batch)
-        loss = self.loss_fn(scores, labels)
+        per_sample_loss, confidence = per_interaction_bce(scores, labels)
+        loss = per_sample_loss.mean()
 
         # Log metrics
         self.log("train_loss", loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
 
-        return loss
+        return {
+            "loss": loss,
+            "per_sample_loss": per_sample_loss.detach(),
+            "confidence": confidence.detach(),
+        }
 
     def validation_step(self, batch, batch_idx):
         """
@@ -78,7 +85,7 @@ class LitRecommender(pl.LightningModule):
         # Get predictions and compute loss
         labels = batch["label"]
         scores = self(batch)
-        val_loss = self.loss_fn(scores, labels)
+        val_loss = per_interaction_bce(scores, labels)[0].mean()
 
         # Log loss
         self.log("val_loss", val_loss, on_epoch=True, prog_bar=True, logger=True)
