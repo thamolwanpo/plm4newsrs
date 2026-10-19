@@ -9,7 +9,7 @@ import torch
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer
 import lightning as pl
-from lightning.pytorch.callbacks import Callback, EarlyStopping
+from lightning.pytorch.callbacks import Callback, EarlyStopping, ModelCheckpoint
 from lightning.pytorch.loggers import TensorBoardLogger
 
 from src.data import NewsDataset
@@ -151,13 +151,18 @@ def train_model(
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+    callbacks = [last_epoch_checkpoint, early_stopping, dynamics_tracker]
+    if config.model_type == "clean":
+        # Clean models keep a checkpoint of every epoch (all are evaluated)
+        callbacks.append(epoch_checkpoints(paths["checkpoints_dir"], run_name))
+
     # Setup trainer
     trainer = pl.Trainer(
         max_epochs=config.epochs,
         accelerator="gpu" if torch.cuda.is_available() else "cpu",
         devices=1,
         logger=logger,
-        callbacks=[last_epoch_checkpoint, early_stopping, dynamics_tracker],
+        callbacks=callbacks,
         log_every_n_steps=10,
         enable_progress_bar=True,
         gradient_clip_val=config.gradient_clip_val,
@@ -184,6 +189,19 @@ def train_model(
         return trainer
 
     return str(last_epoch_checkpoint.checkpoint_path)
+
+
+def epoch_checkpoints(checkpoints_dir: Path, run_name: str) -> ModelCheckpoint:
+    """Save every epoch as {run_name}-epoch=NN-val_auc=X.XXXX.ckpt (epoch is 0-based)."""
+    return ModelCheckpoint(
+        dirpath=checkpoints_dir,
+        filename=f"{run_name}-epoch={{epoch:02d}}-val_auc={{val_auc:.4f}}",
+        auto_insert_metric_name=False,
+        monitor="val_auc",
+        mode="max",
+        save_top_k=-1,
+        every_n_epochs=1,
+    )
 
 
 def user_map_path(checkpoints_dir: Path, run_name: str) -> Path:

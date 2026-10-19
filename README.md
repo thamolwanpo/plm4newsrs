@@ -306,8 +306,10 @@ python scripts/train.py --config configs/experiments/nrms/nrms_glove.yaml --pois
 | `--poison-set A_r…_s…` | Poisoned set of the single model (implies `--model-type poisoned`) |
 | `--dataset`, `--epochs`, `--lr`, `--batch-size`, `--seed` | Overrides |
 
-The best checkpoint (by `val_auc`) is saved to
-`{base_dir}/{experiment_name}/{lm_folder}/checkpoints/{run_name}-epoch=..-val_auc=..ckpt`.
+The final-epoch checkpoint is saved to
+`{base_dir}/{experiment_name}/{lm_folder}/checkpoints/{run_name}-last.ckpt`.
+Clean models also keep every epoch as `{run_name}-epoch=NN-val_auc=X.XXXX.ckpt`
+(`NN` 0-based); each is evaluated as its own model, `{run_name}_epochNN`.
 LSTUR models also save `{run_name}_user_map.json` next to it (the users of
 that training set; unseen users get the "unknown user" embedding).
 
@@ -342,7 +344,7 @@ all_ckpts = train_all_models(config)   # {"clean_seed42": ..., "clean_seed43": .
 ## Evaluation
 
 ```bash
-# Every trained model (best checkpoint each) on every stage6 benchmark
+# Every trained model (last checkpoint each, plus every epoch of clean models) on every stage6 benchmark
 python scripts/evaluate.py --config configs/experiments/nrms/nrms_glove.yaml --generate-report
 
 # Some models / benchmarks, metrics only
@@ -490,6 +492,8 @@ The evaluation CLI runs exposure analysis on `standard`, `standard_clean`, and
 `--analysis-benchmark` (default: `standard`).
 Training saves and evaluation prefers the final epoch checkpoint (`*-last.ckpt`);
 existing runs without one continue to use their best-validation-AUC checkpoint.
+Clean models' per-epoch checkpoints are evaluated too (`clean_seed42_epoch03`, ...;
+`epoch` column of `evaluation_summary.csv`).
 
 ### Data
 
