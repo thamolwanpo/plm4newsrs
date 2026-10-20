@@ -43,7 +43,9 @@ class LitNRMSRecommender(pl.LightningModule):
             batch_idx: Index of batch
 
         Returns:
-            loss: Training loss
+            Dict with the training loss (cross-entropy over the K+1 candidates,
+            used for backward) and the detached scores [batch, K+1], from which
+            the TrainingDynamicsTracker callback computes the training dynamics.
         """
         if batch is None:
             return None
@@ -60,7 +62,7 @@ class LitNRMSRecommender(pl.LightningModule):
         # Log metrics
         self.log("train_loss", loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
 
-        return loss
+        return {"loss": loss, "scores": scores.detach()}
 
     def validation_step(self, batch, batch_idx):
         """
@@ -108,8 +110,10 @@ class LitNRMSRecommender(pl.LightningModule):
         self.val_auc.reset()
 
     def configure_optimizers(self):
-        """Configure optimizer."""
-        return torch.optim.Adam(self.parameters(), lr=self.config.learning_rate)
+        """Configure optimizer (AdamW; identical to Adam when weight_decay is 0)."""
+        return torch.optim.AdamW(
+            self.parameters(), lr=self.config.learning_rate, weight_decay=self.config.weight_decay
+        )
 
     def predict_step(self, batch, batch_idx):
         """

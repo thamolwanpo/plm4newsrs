@@ -61,6 +61,10 @@ def _collate_transformer(batch):
     if user_ids is not None:
         result["user_ids"] = user_ids
 
+    # Per-candidate interaction ids [batch, K+1] (used by the training dynamics)
+    if "sample_ids" in batch[0]:
+        result["sample_ids"] = torch.stack([item["sample_ids"] for item in batch])
+
     return result
 
 
@@ -92,5 +96,9 @@ def _collate_glove(batch):
     # Add user_ids if present
     if user_ids is not None:
         result["user_ids"] = user_ids
+
+    # Per-candidate interaction ids [batch, K+1] (used by the training dynamics)
+    if "sample_ids" in batch[0]:
+        result["sample_ids"] = torch.stack([item["sample_ids"] for item in batch])
 
     return result

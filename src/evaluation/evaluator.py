@@ -40,9 +40,21 @@ BENCHMARK_ORDER = [
 
 CKPT_PATTERN = re.compile(r"^(?P<run>.+?)-epoch=(?P<epoch>\d+)-val_auc=(?P<auc>[0-9.]+?)(-v\d+)?$")
 
+# Model name of a per-epoch checkpoint: "<run name>_epoch<NN>" (NN 0-based)
+EPOCH_SUFFIX = re.compile(r"_epoch(?P<epoch>\d+)$")
+
+
+def split_epoch(model_name: str) -> Tuple[str, Optional[int]]:
+    """'clean_seed42_epoch03' -> ('clean_seed42', 3); 'clean_seed42' -> ('clean_seed42', None)."""
+    match = EPOCH_SUFFIX.search(model_name)
+    if match is None:
+        return model_name, None
+    return model_name[: match.start()], int(match["epoch"])
+
 
 def parse_run_name(run_name: str) -> Tuple[str, Optional[str]]:
-    """Parse 'clean', 'clean_seed42', or 'poisoned_A_r0.5_s1' run names."""
+    """Parse 'clean', 'clean_seed42', or 'poisoned_A_r0.5_s1' run names (epoch suffix ignored)."""
+    run_name, _ = split_epoch(run_name)
     if run_name == "clean" or re.fullmatch(r"clean_seed\d+", run_name):
         return "clean", None
     if run_name.startswith("poisoned_"):
@@ -125,11 +137,15 @@ class ModelEvaluator:
     def discover_models(self, model_names: Optional[List[str]] = None) -> Dict[str, Path]:
         """Last-epoch checkpoint per model, falling back to best legacy checkpoint.
 
+        Clean models additionally contribute every per-epoch checkpoint, as
+        "<run name>_epoch<NN>" models.
+
         Args:
             model_names: run names or prefixes to keep, e.g. ["clean",
                 "poisoned_A_r0.5_s1"] or ["poisoned"] (default: all)
         """
         selected: Dict[str, Tuple[int, float, Path]] = {}
+        epoch_models: Dict[str, Path] = {}
         for path in sorted(self.paths["checkpoints_dir"].glob("*.ckpt")):
             is_last = path.stem.endswith("-last")
             if is_last:
@@ -152,7 +168,12 @@ class ModelEvaluator:
             candidate = (*rank, path)
             if run not in selected or candidate[:2] > selected[run][:2]:
                 selected[run] = candidate
-        return {run: path for run, (_, _, path) in sorted(selected.items())}
+            if not is_last and match and parse_run_name(run)[0] == "clean":
+                epoch_models[f"{run}_epoch{int(match['epoch']):02d}"] = path
+
+        models = {run: path for run, (_, _, path) in selected.items()}
+        models.update(epoch_models)
+        return dict(sorted(models.items()))
 
     def discover_benchmarks(self, benchmark_names: Optional[List[str]] = None) -> List[Path]:
         """stage6 benchmark CSVs (exact names, default: all)."""
@@ -196,7 +217,7 @@ class ModelEvaluator:
     def evaluate_all(
         self, model_names: Optional[List[str]] = None, benchmark_names: Optional[List[str]] = None
     ) -> pd.DataFrame:
-        """Evaluate the last checkpoint of every trained model on every benchmark."""
+        """Evaluate every discovered checkpoint (see discover_models) on every benchmark."""
         set_seed(self.config.seed)
 
         models = self.discover_models(model_names)
@@ -233,7 +254,9 @@ class ModelEvaluator:
                     run_name = run_name[: -len("-resumed")]
             else:
                 match = CKPT_PATTERN.match(model_path.stem)
-                run_name = match["run"] if match else model_path.stem
+                run_name = (
+                    f"{match['run']}_epoch{int(match['epoch']):02d}" if match else model_path.stem
+                )
         print(f"\n🔄 Loading model: {run_name} ({model_path.name})")
 
         tokenizer = None
@@ -249,7 +272,7 @@ class ModelEvaluator:
 
         user_map = None
         if self.config.architecture == "lstur":
-            map_path = user_map_path(model_path.parent, run_name)
+            map_path = user_map_path(model_path.parent, split_epoch(run_name)[0])
             with open(map_path) as f:
                 user_map = json.load(f)
 
@@ -311,6 +334,7 @@ class ModelEvaluator:
             "model": run_name,
             "model_type": model_type,
             "poison_set": poison_set,
+            "epoch": split_epoch(run_name)[1],
             "benchmark": bench_name,
             **metrics,
         }

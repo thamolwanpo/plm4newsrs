@@ -306,10 +306,35 @@ python scripts/train.py --config configs/experiments/nrms/nrms_glove.yaml --pois
 | `--poison-set A_r…_s…` | Poisoned set of the single model (implies `--model-type poisoned`) |
 | `--dataset`, `--epochs`, `--lr`, `--batch-size`, `--seed` | Overrides |
 
-The best checkpoint (by `val_auc`) is saved to
-`{base_dir}/{experiment_name}/{lm_folder}/checkpoints/{run_name}-epoch=..-val_auc=..ckpt`.
+The final-epoch checkpoint is saved to
+`{base_dir}/{experiment_name}/{lm_folder}/checkpoints/{run_name}-last.ckpt`.
+Clean models also keep every epoch as `{run_name}-epoch=NN-val_auc=X.XXXX.ckpt`
+(`NN` 0-based); each is evaluated as its own model, `{run_name}_epochNN`.
 LSTUR models also save `{run_name}_user_map.json` next to it (the users of
 that training set; unseen users get the "unknown user" embedding).
+
+Every run also saves its training dynamics (computed from the training
+forward pass; the training loss stays cross-entropy over the K+1 candidates) to `{lm_folder}/results/{run_name}_training_dynamics.pt`,
+keyed by sample id = 0-based row of the training CSV:
+
+```python
+dyn = torch.load(".../results/clean_training_dynamics.pt")
+dyn["per_instance_loss"]  # {sample_id: [bce_ep1, bce_ep2, ...]}, BCE of sigmoid(score) vs label
+dyn["c_proxy"]            # {sample_id: confidence in the true class, averaged over epochs}
+dyn["el2n"]               # {sample_id: |sigmoid(score) - label|}, eval pass after epoch 1
+
+# Softmax over the K+1 candidates (= the cross-entropy training objective),
+# one entry per group, keyed by the positive's sample_id:
+dyn["per_group_ce_loss"]  # {sample_id: [ce_ep1, ce_ep2, ...]}
+dyn["softmax_c_proxy"]    # {sample_id: softmax probability of the positive, averaged over epochs}
+dyn["softmax_el2n"]       # {sample_id: ||softmax - one-hot label||_2}, eval pass after epoch 1
+```
+
+The first three treat each candidate score as an independent click logit, so
+they cover negatives too but also move with the overall score level, which the
+cross-entropy objective does not constrain.
+
+Negatives reused to fill a short group are not counted twice.
 
 ### Programmatic
 
@@ -329,7 +354,7 @@ all_ckpts = train_all_models(config)   # {"clean_seed42": ..., "clean_seed43": .
 ## Evaluation
 
 ```bash
-# Every trained model (best checkpoint each) on every stage6 benchmark
+# Every trained model (last checkpoint each, plus every epoch of clean models) on every stage6 benchmark
 python scripts/evaluate.py --config configs/experiments/nrms/nrms_glove.yaml --generate-report
 
 # Some models / benchmarks, metrics only
@@ -477,6 +502,8 @@ The evaluation CLI runs exposure analysis on `standard`, `standard_clean`, and
 `--analysis-benchmark` (default: `standard`).
 Training saves and evaluation prefers the final epoch checkpoint (`*-last.ckpt`);
 existing runs without one continue to use their best-validation-AUC checkpoint.
+Clean models' per-epoch checkpoints are evaluated too (`clean_seed42_epoch03`, ...;
+`epoch` column of `evaluation_summary.csv`).
 
 ### Data
 

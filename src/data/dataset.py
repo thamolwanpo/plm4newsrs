@@ -20,6 +20,10 @@ class BaseNewsDataset(Dataset):
     Each sample is one K+1 group: the positive candidate first, followed by
     exactly ``config.num_negatives`` negatives, and a history left-padded to
     ``config.max_history_length``.
+
+    Every candidate (= one user-candidate interaction) carries a sample id:
+    its 0-based row position in the CSV. Negatives reused to fill a group
+    get -1, so each interaction is counted once by the training dynamics.
     """
 
     def __init__(
@@ -37,7 +41,7 @@ class BaseNewsDataset(Dataset):
         pairwise_df = read_model_csv(csv_path)
         print(f"  Rows: {len(pairwise_df)}")
 
-        groups = to_groups(pairwise_df)
+        groups = to_groups(pairwise_df, with_row_ids=True)
         self.df = self._fix_group_sizes(groups)
         print(f"  Groups: {len(self.df)} (dropped {len(groups) - len(self.df)} without negatives)")
 
@@ -64,7 +68,10 @@ class BaseNewsDataset(Dataset):
             if not pos or not negs:
                 fixed.append(None)
                 continue
-            fixed.append(pos + [negs[i % len(negs)] for i in range(k)])
+            fixed.append(
+                pos
+                + [negs[i] if i < len(negs) else (*negs[i % len(negs)][:4], -1) for i in range(k)]
+            )
         groups = groups.assign(impressions=fixed)
         return groups[groups["impressions"].notna()].reset_index(drop=True)
 
@@ -90,6 +97,11 @@ class BaseNewsDataset(Dataset):
         candidate_titles = [self._get_title_by_id(i) for i in candidate_ids]
         candidate_texts = [self._get_text_by_id(i) for i in candidate_ids]
         return candidate_texts, candidate_titles
+
+    def _get_sample_ids(self, idx: int) -> torch.Tensor:
+        """Sample ids (CSV row positions, -1 = reused negative) of one group."""
+        impressions = self.df.iloc[idx]["impressions"]
+        return torch.tensor([int(info[4]) for info in impressions], dtype=torch.long)
 
     def _parse_history(self, idx: int) -> tuple:
         """History texts and titles, left-padded to max_history_length."""
@@ -145,7 +157,7 @@ class NewsDataset(BaseNewsDataset):
         Get a single sample.
 
         Returns:
-            Dict with different keys depending on model type:
+            Dict with sample_ids (one id per candidate) plus keys depending on model type:
             - GloVe: candidate_texts, candidate_titles, history_texts, history_titles, label, user_ids
             - Transformer: candidate_input_ids, candidate_attention_mask,
                           candidate_title_input_ids, candidate_title_attention_mask,
@@ -159,13 +171,15 @@ class NewsDataset(BaseNewsDataset):
         label = 0  # the positive is always the first candidate
 
         if self.use_glove:
-            return self._get_glove_item(
+            item = self._get_glove_item(
                 candidate_texts, candidate_titles, history_texts, history_titles, label, user_idx
             )
         else:
-            return self._get_transformer_item(
+            item = self._get_transformer_item(
                 candidate_texts, candidate_titles, history_texts, history_titles, label, user_idx
             )
+        item["sample_ids"] = self._get_sample_ids(idx)
+        return item
 
     def _get_glove_item(
         self,

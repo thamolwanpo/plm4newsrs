@@ -9,13 +9,14 @@ import torch
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer
 import lightning as pl
-from lightning.pytorch.callbacks import Callback, EarlyStopping
+from lightning.pytorch.callbacks import Callback, EarlyStopping, ModelCheckpoint
 from lightning.pytorch.loggers import TensorBoardLogger
 
 from src.data import NewsDataset
 from src.data.collate import collate_fn
 from src.data.preprocessing import build_user_map, read_model_csv
 from src.models.registry import get_model, get_model_class
+from src.training.dynamics import TrainingDynamicsTracker
 from src.utils.seed import set_seed
 
 
@@ -114,6 +115,16 @@ def train_model(
         persistent_workers=True if num_workers > 0 else False,
     )
 
+    # Same batch size as training, unshuffled: only used for the EL2N pass after epoch 1
+    el2n_loader = DataLoader(
+        train_dataset,
+        batch_size=config.train_batch_size,
+        shuffle=False,
+        collate_fn=collate_fn,
+        pin_memory=True,
+        num_workers=num_workers,
+    )
+
     print(f"\nDataset sizes:")
     print(f"  Training: {len(train_dataset)} samples")
     print(f"  Validation: {len(val_dataset)} samples")
@@ -130,6 +141,7 @@ def train_model(
 
     # Setup callbacks
     last_epoch_checkpoint = LastEpochCheckpoint(paths["checkpoints_dir"], run_name)
+    dynamics_tracker = TrainingDynamicsTracker(el2n_loader)
 
     early_stopping = EarlyStopping(
         monitor="val_auc", patience=config.early_stopping_patience, verbose=True, mode="max"
@@ -139,13 +151,18 @@ def train_model(
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+    callbacks = [last_epoch_checkpoint, early_stopping, dynamics_tracker]
+    if config.model_type == "clean":
+        # Clean models keep a checkpoint of every epoch (all are evaluated)
+        callbacks.append(epoch_checkpoints(paths["checkpoints_dir"], run_name))
+
     # Setup trainer
     trainer = pl.Trainer(
         max_epochs=config.epochs,
         accelerator="gpu" if torch.cuda.is_available() else "cpu",
         devices=1,
         logger=logger,
-        callbacks=[last_epoch_checkpoint, early_stopping],
+        callbacks=callbacks,
         log_every_n_steps=10,
         enable_progress_bar=True,
         gradient_clip_val=config.gradient_clip_val,
@@ -164,15 +181,37 @@ def train_model(
     print("=" * 70)
     print(f"✅ Last-epoch model saved: {last_epoch_checkpoint.checkpoint_path}")
 
+    # Per-instance loss, C-proxy and EL2N ledgers, keyed by training CSV row
+    dynamics_path = dynamics_tracker.save(training_dynamics_path(paths["results_dir"], run_name))
+    print(f"✅ Training dynamics saved: {dynamics_path}")
+
     if return_trainer:
         return trainer
 
     return str(last_epoch_checkpoint.checkpoint_path)
 
 
+def epoch_checkpoints(checkpoints_dir: Path, run_name: str) -> ModelCheckpoint:
+    """Save every epoch as {run_name}-epoch=NN-val_auc=X.XXXX.ckpt (epoch is 0-based)."""
+    return ModelCheckpoint(
+        dirpath=checkpoints_dir,
+        filename=f"{run_name}-epoch={{epoch:02d}}-val_auc={{val_auc:.4f}}",
+        auto_insert_metric_name=False,
+        monitor="val_auc",
+        mode="max",
+        save_top_k=-1,
+        every_n_epochs=1,
+    )
+
+
 def user_map_path(checkpoints_dir: Path, run_name: str) -> Path:
     """Where the LSTUR user map of a trained model is stored."""
     return Path(checkpoints_dir) / f"{run_name}_user_map.json"
+
+
+def training_dynamics_path(results_dir: Path, run_name: str) -> Path:
+    """Where the training dynamics ledgers of a training run are stored."""
+    return Path(results_dir) / f"{run_name}_training_dynamics.pt"
 
 
 def get_training_runs(config) -> List[tuple]:

@@ -43,7 +43,9 @@ class LitLSTURRecommender(pl.LightningModule):
             batch_idx: Index of batch
 
         Returns:
-            loss: Training loss
+            Dict with the training loss (cross-entropy over the K+1 candidates,
+            used for backward) and the detached scores [batch, K+1], from which
+            the TrainingDynamicsTracker callback computes the training dynamics.
         """
         if batch is None:
             return None
@@ -60,7 +62,7 @@ class LitLSTURRecommender(pl.LightningModule):
         # Log metrics
         self.log("train_loss", loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
 
-        return loss
+        return {"loss": loss, "scores": scores.detach()}
 
     def validation_step(self, batch, batch_idx):
         """
