@@ -421,12 +421,20 @@ mean the model promotes that fake news less.
 
 ## Forget-Set Features for Coreset Selection
 
-Standalone step (not part of training or evaluation) for UPCORE coreset
-selection in fakeun-dataprep (`coreset_selection`, `--method upcore`). It
-runs the model to be unlearned over a forget set and saves one feature
-vector per K+1 group: the user embedding, the embedding of the positive
-(fake) candidate, and their elementwise product (which sums to the click
-logit). Works for all four architectures.
+Standalone step (not part of training or evaluation) for UPCORE and ALISE
+coreset selection in fakeun-dataprep (`coreset_selection`, `--method upcore`
+/ `--method alise`). It runs the model to be unlearned over a forget set and
+saves one feature vector per K+1 group: the user embedding, the embedding of
+the positive (fake) candidate, and their elementwise product (which sums to
+the click logit). Works for all four architectures.
+
+For ALISE it also saves the representation gradients of the training loss
+(cross-entropy over the K+1 candidates) w.r.t. the user embedding and the
+positive candidate embedding, per forget group (`grad_user`, `grad_cand`)
+and averaged over the retain set (`retain_grad_user`, `retain_grad_cand`).
+The retain set is `retain_model.csv` next to the forget file; the retain
+pass encodes `--retain-max-groups` random groups of it. `--no-grads` skips
+both (features only, as before).
 
 ```bash
 python scripts/extract_forget_features.py \
@@ -443,12 +451,17 @@ python scripts/extract_forget_features.py \
 | `--data-root DIR` | config | fakeun-dataprep output folder (for `news_items.csv`) |
 | `--user-map JSON` | next to checkpoint | LSTUR user map |
 | `--out NPZ` | `<forget dir>/coresets/forget_features__<run>.npz` | Output file |
+| `--retain CSV` | `<forget dir>/retain_model.csv` | Retain set for the ALISE retain gradient |
+| `--retain-max-groups N` | 10000 | Random retain groups the retain gradient averages over (0 = all) |
+| `--retain-seed N` | 0 | Seed of that sample |
+| `--no-grads` | off | Features only: skip the ALISE gradients and the retain pass |
 | `--batch-size N` | `val_batch_size` | Inference batch size |
 | `--allow-mismatch` | off | Allow a checkpoint whose A set differs from the forget file's |
 
-The run's timing (model load, data load, forward passes, total) is saved
+The run's timing (model load, data load, forward passes, retain load and
+forward passes, total) is saved
 in the `.npz` and in `<out>.timing.json`; fakeun-dataprep adds it to the
-UPCORE selection time in its `timing_log.csv`.
+UPCORE / ALISE selection time in its `timing_log.csv`.
 
 ---
 
@@ -554,7 +567,7 @@ plm4newsrs/
 ├── scripts/
 │   ├── train.py
 │   ├── evaluate.py
-│   └── extract_forget_features.py   # UPCORE coreset features (standalone)
+│   └── extract_forget_features.py   # UPCORE / ALISE coreset features (standalone)
 ├── Makefile
 ├── train.sh                    # batch: train + evaluate several configs
 └── requirements.txt
