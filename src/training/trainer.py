@@ -17,6 +17,7 @@ from src.data.collate import collate_fn
 from src.data.preprocessing import build_user_map, read_model_csv
 from src.models.registry import get_model, get_model_class
 from src.training.dynamics import TrainingDynamicsTracker
+from src.training.presentation_log import PresentationLogger
 from src.utils.seed import set_seed
 
 
@@ -142,6 +143,7 @@ def train_model(
     # Setup callbacks
     last_epoch_checkpoint = LastEpochCheckpoint(paths["checkpoints_dir"], run_name)
     dynamics_tracker = TrainingDynamicsTracker(el2n_loader)
+    presentation_logger = PresentationLogger(train_dataset.item_ids, train_dataset.item_is_fake)
 
     early_stopping = EarlyStopping(
         monitor="val_auc", patience=config.early_stopping_patience, verbose=True, mode="max"
@@ -151,7 +153,7 @@ def train_model(
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    callbacks = [last_epoch_checkpoint, early_stopping, dynamics_tracker]
+    callbacks = [last_epoch_checkpoint, early_stopping, dynamics_tracker, presentation_logger]
     if config.model_type == "clean":
         # Clean models keep a checkpoint of every epoch (all are evaluated)
         callbacks.append(epoch_checkpoints(paths["checkpoints_dir"], run_name))
@@ -185,6 +187,10 @@ def train_model(
     dynamics_path = dynamics_tracker.save(training_dynamics_path(paths["results_dir"], run_name))
     print(f"✅ Training dynamics saved: {dynamics_path}")
 
+    # Every presentation of every group, plus per-article gradient sums by role
+    log_path = presentation_logger.save(presentation_log_path(paths["results_dir"], run_name))
+    print(f"✅ Presentation log saved: {log_path}")
+
     if return_trainer:
         return trainer
 
@@ -212,6 +218,11 @@ def user_map_path(checkpoints_dir: Path, run_name: str) -> Path:
 def training_dynamics_path(results_dir: Path, run_name: str) -> Path:
     """Where the training dynamics ledgers of a training run are stored."""
     return Path(results_dir) / f"{run_name}_training_dynamics.pt"
+
+
+def presentation_log_path(results_dir: Path, run_name: str) -> Path:
+    """Where the per-presentation training log of a training run is stored."""
+    return Path(results_dir) / f"{run_name}_presentation_log.pt"
 
 
 def get_training_runs(config) -> List[tuple]:

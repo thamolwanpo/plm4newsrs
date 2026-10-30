@@ -336,6 +336,39 @@ cross-entropy objective does not constrain.
 
 Negatives reused to fill a short group are not counted twice.
 
+It also saves a log of every presentation of every group (one row per group per
+epoch, in training order) and per-article gradient sums to
+`{lm_folder}/results/{run_name}_presentation_log.pt`. None of this can be
+recovered from checkpoints:
+
+```python
+log = torch.load(".../results/clean_presentation_log.pt")
+pres = log["presentations"]          # flat tensors, P = groups x epochs rows
+pres["group_id"]                     # [P] sample_id of the positive (as per_group_ce_loss)
+pres["epoch"], pres["step"]          # [P] epoch and optimizer step of the presentation
+pres["scores"], pres["probs"]        # [P, K+1] logits s and softmax p (positive first)
+pres["loss"], pres["p0"]             # [P] cross-entropy and probability of the clicked item
+pres["margin"]                       # [P] s_0 - max s_neg (AUM-style margin)
+pres["ranked_first"]                 # [P] margin > 0 (forgetting events: True -> False)
+pres["attention"]                    # [P, H] user-encoder attention alpha_i per history slot (NaN for LSTUR)
+pres["history_grad_norm"]            # [P, H] ||dl/dr_i|| of the group's own loss per history slot
+pres["candidate_item_idx"]           # [P, K+1] article index of each candidate
+pres["history_item_idx"]             # [P, H] article index of each history slot (-1 = padding)
+
+log["item_ids"], log["item_is_fake"] # article index -> news_items.csv item_id / is_fake
+log["accumulated_grad"]["history"]   # [num_articles, d] sum of lr_t * dL/dr_i over its history slots
+log["accumulated_grad"]["positive"]  # [num_articles, d] same as the clicked candidate v_0
+log["accumulated_grad"]["negative"]  # [num_articles, d] same as a negative candidate v_j
+```
+
+EL2N at any epoch is `||probs - one_hot(0)||_2`. The gradients are taken with
+respect to the news vectors (the news encoder outputs), from hooks in the
+normal backward pass. `accumulated_grad` uses the gradient of the batch loss
+(mean over the batch), so it follows the actual update; lr_t is the
+optimizer's learning rate at that step (with AdamW this is a proxy, not the
+Adam step itself). Padding slots are left out of the sums but kept in the
+per-slot columns (the user encoder does not mask padding).
+
 ### Programmatic
 
 ```python

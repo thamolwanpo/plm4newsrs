@@ -7,6 +7,7 @@ from typing import Optional, Dict, Any, List
 
 from configs.models.simple_config import ModelConfig
 from .preprocessing import (
+    load_news_index,
     load_news_items,
     pad_history,
     read_model_csv,
@@ -24,6 +25,9 @@ class BaseNewsDataset(Dataset):
     Every candidate (= one user-candidate interaction) carries a sample id:
     its 0-based row position in the CSV. Negatives reused to fill a group
     get -1, so each interaction is counted once by the training dynamics.
+
+    Every candidate and history slot also carries an article index: the
+    article's row position in news_items.csv (-1 = padding / unknown id).
     """
 
     def __init__(
@@ -48,6 +52,8 @@ class BaseNewsDataset(Dataset):
         print(f"Loading news items from: {config.news_items_path}")
         self.news_texts, self.news_titles = load_news_items(config.news_items_path)
         print(f"  Loaded {len(self.news_titles) - 1} news items")
+        self.item_ids, self.item_is_fake = load_news_index(config.news_items_path)
+        self.item_index = {item_id: i for i, item_id in enumerate(self.item_ids)}
 
         self.use_lstur = config.architecture == "lstur"
         self.user_to_idx = user_map
@@ -103,6 +109,19 @@ class BaseNewsDataset(Dataset):
         impressions = self.df.iloc[idx]["impressions"]
         return torch.tensor([int(info[4]) for info in impressions], dtype=torch.long)
 
+    def _item_indices(self, item_ids: List[str]) -> torch.Tensor:
+        """Article indices (news_items.csv rows) of ids; padding / unknown ids -> -1."""
+        return torch.tensor([self.item_index.get(i, -1) for i in item_ids], dtype=torch.long)
+
+    def _get_item_indices(self, idx: int) -> Dict[str, torch.Tensor]:
+        """Article indices of the candidates [K+1] and of the padded history [H] of one group."""
+        row = self.df.iloc[idx]
+        history_ids = pad_history(row["history_ids"], self.config.max_history_length)
+        return {
+            "candidate_item_idx": self._item_indices([info[0] for info in row["impressions"]]),
+            "history_item_idx": self._item_indices(history_ids),
+        }
+
     def _parse_history(self, idx: int) -> tuple:
         """History texts and titles, left-padded to max_history_length."""
         history_ids = pad_history(
@@ -157,7 +176,8 @@ class NewsDataset(BaseNewsDataset):
         Get a single sample.
 
         Returns:
-            Dict with sample_ids (one id per candidate) plus keys depending on model type:
+            Dict with sample_ids (one id per candidate), candidate_item_idx [K+1] and
+            history_item_idx [H] (article indices, -1 = padding) plus keys depending on model type:
             - GloVe: candidate_texts, candidate_titles, history_texts, history_titles, label, user_ids
             - Transformer: candidate_input_ids, candidate_attention_mask,
                           candidate_title_input_ids, candidate_title_attention_mask,
@@ -179,6 +199,7 @@ class NewsDataset(BaseNewsDataset):
                 candidate_texts, candidate_titles, history_texts, history_titles, label, user_idx
             )
         item["sample_ids"] = self._get_sample_ids(idx)
+        item.update(self._get_item_indices(idx))
         return item
 
     def _get_glove_item(

@@ -65,6 +65,11 @@ def _collate_transformer(batch):
     if "sample_ids" in batch[0]:
         result["sample_ids"] = torch.stack([item["sample_ids"] for item in batch])
 
+    # Article indices [batch, K+1] and [batch, H] (used by the presentation log)
+    for key in ("candidate_item_idx", "history_item_idx"):
+        if key in batch[0]:
+            result[key] = torch.stack([item[key] for item in batch])
+
     return result
 
 
@@ -100,5 +105,10 @@ def _collate_glove(batch):
     # Per-candidate interaction ids [batch, K+1] (used by the training dynamics)
     if "sample_ids" in batch[0]:
         result["sample_ids"] = torch.stack([item["sample_ids"] for item in batch])
+
+    # Article indices [batch, K+1] and [batch, H] (used by the presentation log)
+    for key in ("candidate_item_idx", "history_item_idx"):
+        if key in batch[0]:
+            result[key] = torch.stack([item[key] for item in batch])
 
     return result
