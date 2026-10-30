@@ -15,7 +15,7 @@ CONFIGS=(
     # configs/experiments/nrms/nrms_bert_frozen.yaml
     configs/experiments/naml/naml_bert_frozen_politifact.yaml
     configs/experiments/lstur/lstur_bert_frozen_politifact.yaml
-    configs/experiments/nrms/nrms_bert_frozen_politifact.yaml
+    # configs/experiments/nrms/nrms_bert_frozen_politifact.yaml
     # configs/experiments/naml/naml_bert_frozen_gossipcop.yaml
     # configs/experiments/lstur/lstur_bert_frozen_gossipcop.yaml
     # configs/experiments/nrms/nrms_bert_frozen_gossipcop.yaml
