@@ -13,8 +13,8 @@ GLOBAL_LOG="$LOG_DIR/batch_log_$(date +%Y%m%d_%H%M%S).txt"
 
 CONFIGS=(
     # configs/experiments/nrms/nrms_bert_frozen.yaml
-    configs/experiments/naml/naml_bert_frozen_politifact.yaml
-    configs/experiments/lstur/lstur_bert_frozen_politifact.yaml
+    # configs/experiments/naml/naml_bert_frozen_politifact.yaml
+    # configs/experiments/lstur/lstur_bert_frozen_politifact.yaml
     configs/experiments/nrms/nrms_bert_frozen_politifact.yaml
     # configs/experiments/naml/naml_bert_frozen_gossipcop.yaml
     # configs/experiments/lstur/lstur_bert_frozen_gossipcop.yaml
@@ -41,7 +41,7 @@ run_and_log() {
 
 for CONFIG in "${CONFIGS[@]}"; do
     run_and_log python scripts/train.py --config "$CONFIG" --train-all "${EXTRA_ARGS[@]}"
-    run_and_log python scripts/evaluate.py --config "$CONFIG" --generate-report "${EXTRA_ARGS[@]}"
+    # run_and_log python scripts/evaluate.py --config "$CONFIG" --generate-report "${EXTRA_ARGS[@]}"
 done
 
 echo "All jobs in the batch are complete!" | tee -a "$GLOBAL_LOG"
