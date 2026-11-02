@@ -34,6 +34,9 @@ class NAMLRecommenderModel(nn.Module):
         self.store_intermediate_outputs = False
         self.intermediate_outputs = {}
 
+        # Called with (candidate_embeddings, history_embeddings) when set (see PresentationLogger)
+        self.news_vector_hook = None
+
     def enable_analysis_mode(self):
         """Enable analysis mode for all components."""
         self.store_intermediate_outputs = True
@@ -95,6 +98,9 @@ class NAMLRecommenderModel(nn.Module):
         if self.store_intermediate_outputs:
             self.intermediate_outputs["candidate_embeddings"] = candidate_embeddings.detach().cpu()
             self.intermediate_outputs["history_embeddings"] = history_embeddings.detach().cpu()
+
+        if self.news_vector_hook is not None:
+            self.news_vector_hook(candidate_embeddings, history_embeddings)
 
         # Get user representation from history
         user_embedding = self.user_encoder(history_embeddings)

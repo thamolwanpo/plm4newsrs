@@ -82,6 +82,17 @@ def load_news_items(news_items_path: Union[str, Path]) -> Tuple[Dict[str, str], 
     return texts, titles
 
 
+def load_news_index(news_items_path: Union[str, Path]) -> Tuple[List[str], List[int]]:
+    """Article ids of news_items.csv in file order (position = article index) and is_fake flags."""
+    df = pd.read_csv(
+        news_items_path,
+        usecols=["item_id", "is_fake"],
+        dtype={"item_id": str},
+        keep_default_na=False,
+    )
+    return df["item_id"].tolist(), df["is_fake"].map(to_flag).astype(int).tolist()
+
+
 def to_groups(
     df_pairwise: pd.DataFrame,
     target_filter: Optional[Set[str]] = None,
