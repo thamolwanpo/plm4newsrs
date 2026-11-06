@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from configs import load_config, create_config
 from src.training import train_model, train_all_models
+from src.training.trainer import skip_or_prepare_run
 from src.utils.seed import set_seed
 
 
@@ -119,6 +120,12 @@ Examples:
         "--train-all",
         action="store_true",
         help="Train the clean model on three consecutive seeds, plus one model per poisoned set",
+    )
+    parser.add_argument(
+        "--skip-existing",
+        action="store_true",
+        help="Skip runs that already finished (last checkpoint + presentation log exist); "
+        "unfinished runs are retrained from scratch. Rerun the same command after a crash",
     )
     parser.add_argument("--resume", type=str, help="Path to checkpoint to resume training from")
 
@@ -249,7 +256,7 @@ Examples:
             print("\n" + "=" * 70)
             print("TRAINING ALL MODEL TYPES")
             print("=" * 70)
-            trained_models = train_all_models(config, device)
+            trained_models = train_all_models(config, device, skip_existing=args.skip_existing)
 
             print("\n" + "=" * 70)
             print("TRAINING SUMMARY")
@@ -261,7 +268,11 @@ Examples:
             print("\n" + "=" * 70)
             print("STARTING TRAINING")
             print("=" * 70)
-            checkpoint_path = train_model(config, device)
+            checkpoint_path = None
+            if args.skip_existing:
+                checkpoint_path = skip_or_prepare_run(config, config.run_name)
+            if checkpoint_path is None:
+                checkpoint_path = train_model(config, device)
 
             if checkpoint_path:
                 print("\n" + "=" * 70)

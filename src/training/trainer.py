@@ -225,6 +225,34 @@ def presentation_log_path(results_dir: Path, run_name: str) -> Path:
     return Path(results_dir) / f"{run_name}_presentation_log.pt"
 
 
+def is_run_complete(paths: Dict[str, Path], run_name: str) -> bool:
+    """True if a run finished: its last checkpoint and its end-of-training
+    presentation log (the last file train_model writes) both exist."""
+    return (Path(paths["checkpoints_dir"]) / f"{run_name}-last.ckpt").exists() and (
+        presentation_log_path(paths["results_dir"], run_name).exists()
+    )
+
+
+def remove_partial_checkpoints(paths: Dict[str, Path], run_name: str) -> None:
+    """Delete the checkpoints an interrupted run left behind, so retraining it
+    from scratch does not leave stale epoch checkpoints for the evaluator."""
+    for ckpt in sorted(Path(paths["checkpoints_dir"]).glob(f"{run_name}-*.ckpt")):
+        print(f"  Removing checkpoint of unfinished run: {ckpt}")
+        ckpt.unlink()
+
+
+def skip_or_prepare_run(config, run_name: str) -> Optional[str]:
+    """For --skip-existing: the last checkpoint if the run already finished
+    (skip it), else None after clearing the run's leftover checkpoints."""
+    paths = config.get_paths()
+    if is_run_complete(paths, run_name):
+        checkpoint = str(Path(paths["checkpoints_dir"]) / f"{run_name}-last.ckpt")
+        print(f"⏭️  Skipping {run_name}: already trained ({checkpoint})")
+        return checkpoint
+    remove_partial_checkpoints(paths, run_name)
+    return None
+
+
 def get_training_runs(config) -> List[tuple]:
     """(model_type, poison_set, seed, run_name) entries for --train-all."""
     poison_sets = config.poison_sets or config.discover_poison_sets()
@@ -238,13 +266,17 @@ def get_training_runs(config) -> List[tuple]:
     return clean_runs + poisoned_runs
 
 
-def train_all_models(config, device: Optional[torch.device] = None) -> Dict[str, str]:
+def train_all_models(
+    config, device: Optional[torch.device] = None, skip_existing: bool = False
+) -> Dict[str, str]:
     """
     Train three clean seeds and every poisoned model.
 
     Args:
         config: Base configuration (copied for each run)
         device: Device to train on (auto-detected if None)
+        skip_existing: Skip runs that already finished; an unfinished run has
+            its leftover checkpoints removed and is trained again from scratch
 
     Returns:
         Dictionary mapping run name to checkpoint path
@@ -267,6 +299,7 @@ def train_all_models(config, device: Optional[torch.device] = None) -> Dict[str,
     print("=" * 70)
 
     trained_models = {}
+    skipped_models = []
     failed_models = []
 
     for i, (model_type, poison_set, seed, run_name) in enumerate(runs, 1):
@@ -279,6 +312,13 @@ def train_all_models(config, device: Optional[torch.device] = None) -> Dict[str,
         print(f"\n{'='*70}")
         print(f"TRAINING [{i}/{len(runs)}]: {run_name}")
         print(f"{'='*70}")
+
+        if skip_existing:
+            existing = skip_or_prepare_run(model_config, run_name)
+            if existing:
+                trained_models[run_name] = existing
+                skipped_models.append(run_name)
+                continue
 
         try:
             model_path = train_model(model_config, device, run_name=run_name)
@@ -303,6 +343,8 @@ def train_all_models(config, device: Optional[torch.device] = None) -> Dict[str,
     print("ALL MODELS TRAINING COMPLETE")
     print("=" * 70)
     print(f"Successfully trained: {len(trained_models)}/{len(runs)} models\n")
+    if skipped_models:
+        print(f"Already trained (skipped): {skipped_models}\n")
 
     for run_name, path in trained_models.items():
         print(f"  ✅ {run_name}: {path}")

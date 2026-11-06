@@ -302,12 +302,25 @@ python scripts/train.py --config configs/experiments/nrms/nrms_glove.yaml --pois
 | `--data-root DIR` | fakeun-dataprep output folder of the dataset |
 | `--train-all` | Train the clean model on three consecutive seeds starting at `seed`, and one model per poisoned set |
 | `--poison-sets A…` | Poisoned sets for `--train-all` (default: all in `stage4/`) |
+| `--skip-existing` | Skip runs that already finished; retrain unfinished ones from scratch (see below) |
 | `--model-type clean\|poisoned` | Train a single model |
 | `--poison-set A_r…_s…` | Poisoned set of the single model (implies `--model-type poisoned`) |
 | `--dataset`, `--epochs`, `--lr`, `--batch-size`, `--seed` | Overrides |
 
 The final-epoch checkpoint is saved to
 `{base_dir}/{experiment_name}/{lm_folder}/checkpoints/{run_name}-last.ckpt`.
+
+**Restarting after a crash or disconnect (e.g. on Colab):** rerun the same
+command with `--skip-existing`. A run counts as finished when both
+`checkpoints/{run_name}-last.ckpt` and `results/{run_name}_presentation_log.pt`
+(the last file written by a run) exist; those are skipped. A run that was cut
+off has its leftover `{run_name}-*.ckpt` files deleted and is trained again
+from the first epoch, so the evaluator never picks up half-trained checkpoints.
+
+```bash
+python scripts/train.py --config configs/experiments/nrms/nrms_glove.yaml --train-all \
+    --base-dir /content/drive/MyDrive/plm4newsrs_outputs/politifact --skip-existing
+```
 Clean models also keep every epoch as `{run_name}-epoch=NN-val_auc=X.XXXX.ckpt`
 (`NN` 0-based); each is evaluated as its own model, `{run_name}_epochNN`.
 LSTUR models also save `{run_name}_user_map.json` next to it (the users of
