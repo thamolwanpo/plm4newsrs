@@ -49,6 +49,7 @@ Examples:
     )
 
     parser.add_argument("--config", type=str, required=True, help="Path to config YAML file")
+    parser.add_argument("--dataset", type=str, help="Dataset name (overrides config)")
     parser.add_argument(
         "--data-root",
         type=str,
@@ -102,6 +103,14 @@ Examples:
     args = parser.parse_args()
 
     config = load_config(args.config)
+    if args.dataset and args.dataset != config.dataset:
+        # Re-derive the default paths that were based on the old dataset name
+        if config.base_dir == Path(f"./outputs/{config.dataset}"):
+            config.base_dir = None
+        if config.data_root == Path(f"data/problem2/{config.dataset}"):
+            config.data_root = None
+        config.dataset = args.dataset
+        config.__post_init__()
     if args.seed:
         config.seed = args.seed
     if args.output_dir:
