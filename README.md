@@ -128,6 +128,20 @@ make run CONFIG=configs/experiments/nrms/nrms_glove.yaml \
     DATA_ROOT=../fakeun-dataprep/output/problem2/politifact
 ```
 
+### Running on Google Colab
+
+[`notebooks/colab_run_all_bert.ipynb`](notebooks/colab_run_all_bert.ipynb) trains and
+evaluates every BERT model (Simple, NAML, NRMS, LSTUR × frozen / fine-tuned) on every
+dataset in an uploaded data zip. Each config's dataset is overridden by the notebook, so the
+`*_politifact.yaml` configs serve as templates for all datasets. Training runs on Colab's
+local disk. After each dataset × model pair, the results, reports, logs and each run's
+final `-last.ckpt` are copied to Google Drive and a done marker is written there, so
+*Runtime → Run all* after a disconnect continues with the pairs not yet done. Expect about
+40 GB of Drive space per dataset (≈440 MB per BERT checkpoint).
+
+Open it in Colab from GitHub (File → Open notebook → GitHub), or go to
+`https://colab.research.google.com/github/thamolwanpo/plm4newsrs/blob/<branch>/notebooks/colab_run_all_bert.ipynb`.
+
 ---
 
 ## Model Architectures
