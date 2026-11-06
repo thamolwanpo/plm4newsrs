@@ -199,8 +199,12 @@ class PresentationLogger(Callback):
         self.epoch_records.append(record)
         self._step_buffers = {}
 
-    def log(self) -> dict:
-        """Presentations of all epochs (flat, in training order) and the per-article sums."""
+    def as_dict(self) -> dict:
+        """Presentations of all epochs (flat, in training order) and the per-article sums.
+
+        Not named ``log``: Lightning gives callbacks a ``log`` attribute that
+        forwards to ``LightningModule.log(name, value)``, which shadows it.
+        """
         presentations = {}
         if self.epoch_records:
             presentations = {
@@ -219,7 +223,7 @@ class PresentationLogger(Callback):
         """Save the log with torch.save()."""
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        torch.save(self.log(), path)
+        torch.save(self.as_dict(), path)
         return path
 
 
