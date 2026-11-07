@@ -59,7 +59,7 @@ bert_aggregation: "mean"
 # Training hyperparameters
 epochs: 3
 train_batch_size: 32
-val_batch_size: 32
+val_batch_size: 64
 learning_rate: 2.0e-5
 early_stopping_patience: 3
 

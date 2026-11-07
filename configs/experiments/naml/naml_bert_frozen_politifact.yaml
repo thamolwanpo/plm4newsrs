@@ -50,7 +50,7 @@ drop_rate: 0.2
 # Training hyperparameters
 epochs: 3
 train_batch_size: 32  # Larger batch since less memory needed
-val_batch_size: 32
+val_batch_size: 64
 learning_rate: 2.0e-5
 early_stopping_patience: 3
 
