@@ -122,6 +122,12 @@ Examples:
         help="Train the clean model on three consecutive seeds, plus one model per poisoned set",
     )
     parser.add_argument(
+        "--run-name",
+        type=str,
+        help="Name of a single run's outputs (default: 'clean' or 'poisoned_{set}'); "
+        "e.g. clean_seed43 to train one of --train-all's runs on its own",
+    )
+    parser.add_argument(
         "--skip-existing",
         action="store_true",
         help="Skip runs that already finished (last checkpoint + presentation log exist); "
@@ -253,6 +259,8 @@ Examples:
             return 1
 
         elif args.train_all:
+            if args.run_name:
+                parser.error("--run-name names a single run; it cannot be used with --train-all")
             print("\n" + "=" * 70)
             print("TRAINING ALL MODEL TYPES")
             print("=" * 70)
@@ -268,11 +276,12 @@ Examples:
             print("\n" + "=" * 70)
             print("STARTING TRAINING")
             print("=" * 70)
+            run_name = args.run_name or config.run_name
             checkpoint_path = None
             if args.skip_existing:
-                checkpoint_path = skip_or_prepare_run(config, config.run_name)
+                checkpoint_path = skip_or_prepare_run(config, run_name)
             if checkpoint_path is None:
-                checkpoint_path = train_model(config, device)
+                checkpoint_path = train_model(config, device, run_name=run_name)
 
             if checkpoint_path:
                 print("\n" + "=" * 70)
