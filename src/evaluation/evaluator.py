@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from configs import ModelConfig
-from src.data.preprocessing import load_news_items
+from src.data.preprocessing import load_news_items, read_model_csv, to_groups
 from src.models.registry import get_model_class
 from src.training.trainer import user_map_path
 from src.utils.seed import set_seed
@@ -25,6 +25,11 @@ from .visualizer import EvaluationVisualizer
 # stage6 probe benchmarks that cover the whole poisoning pool; for a given
 # poisoned set they are also evaluated on that set's injected items only.
 POISON_PROBES = ("poison_probe", "poison_probe_realneg")
+
+# stage6 files that are an exact subset of another file's queries (same rows,
+# same sampled negatives: fakeun-dataprep splits standard by history
+# composition). Their scores are cut from the parent's, with no inference.
+SUBSET_OF = {"standard_clean": "standard", "standard_mixed": "standard"}
 
 # Order used in summaries (any other stage6 csv is appended alphabetically)
 BENCHMARK_ORDER = [
@@ -71,6 +76,12 @@ class ModelEvaluator:
       per poisoned set, restricted to that set's injected items
       (stage4/A_.../A_fake_items.csv), as "<benchmark>@<A set>": the clean
       model on every poisoned set (its reference), a poisoned model on its own.
+    - Inference runs once per file. "<benchmark>@<set>" and the SUBSET_OF
+      files are cut from the scores of the file they come from, when the
+      same model was already evaluated on it (the plan's order guarantees
+      this; otherwise they fall back to their own inference run). The model
+      scores each query on its own, so the results are those a separate run
+      would give.
     """
 
     def __init__(
@@ -104,6 +115,8 @@ class ModelEvaluator:
 
         self._news_items = None
         self._benchmark_cache: Dict[str, BenchmarkDataset] = {}
+        # derived benchmark -> its source file's query ids (None: not derivable)
+        self._derived_queries: Dict[str, Optional[List[int]]] = {}
 
         print(f"\n{'='*70}")
         print("MODEL EVALUATOR INITIALIZED")
@@ -313,19 +326,24 @@ class ModelEvaluator:
         self, model, tokenizer, run_name, bench_name, bench_path, filter_set=None, user_map=None
     ) -> Dict[str, Any]:
         print(f"   📍 Benchmark: {bench_name}")
-        dataset = self._get_benchmark(bench_name, bench_path, filter_set, tokenizer, user_map)
-        if len(dataset) == 0:
+        detailed = self._derive_from_scored(run_name, bench_name, bench_path, filter_set)
+        if detailed is None:
+            dataset = self._get_benchmark(bench_name, bench_path, filter_set, tokenizer, user_map)
+            if len(dataset) == 0:
+                print("      (no queries - skipped)")
+                return {}
+
+            loader = DataLoader(
+                dataset,
+                batch_size=self.config.val_batch_size,
+                shuffle=False,
+                collate_fn=benchmark_collate_fn,
+                num_workers=0,
+            )
+            detailed = self._run_inference(model, loader)
+        elif len(detailed) == 0:
             print("      (no queries - skipped)")
             return {}
-
-        loader = DataLoader(
-            dataset,
-            batch_size=self.config.val_batch_size,
-            shuffle=False,
-            collate_fn=benchmark_collate_fn,
-            num_workers=0,
-        )
-        detailed = self._run_inference(model, loader)
         metrics = self._calculate_metrics(detailed)
 
         model_type, poison_set = parse_run_name(run_name)
@@ -349,6 +367,67 @@ class ModelEvaluator:
             f"MRR={metrics['MRR']:.4f}  NDCG@10={metrics['NDCG@10']:.4f}"
         )
         return metrics
+
+    def _derive_from_scored(
+        self, run_name, bench_name, bench_path, filter_set=None
+    ) -> Optional[pd.DataFrame]:
+        """Detailed results of bench_name cut from a file this model was already
+        scored on, or None if they can't be (then the caller runs inference).
+
+        - with filter_set ("<file>@<set>"): the file's queries whose target is
+          in the set
+        - SUBSET_OF files: the parent file's queries that the subset file holds
+        Queries are renumbered 0..n-1 in file order, as a separate run would.
+        """
+        stem = Path(bench_path).stem
+        if filter_set is not None:
+            source = stem
+        elif stem in SUBSET_OF:
+            source = SUBSET_OF[stem]
+        else:
+            return None
+        full = self.detailed_results.get((run_name, source))
+        if full is None or source not in self._benchmark_cache:
+            return None  # this model wasn't scored on the source file
+
+        if bench_name not in self._derived_queries:
+            self._derived_queries[bench_name] = self._select_queries(
+                source, stem, bench_path, filter_set
+            )
+        query_ids = self._derived_queries[bench_name]
+        if query_ids is None:
+            return None
+
+        new_id = {q: i for i, q in enumerate(query_ids)}
+        detailed = full[full["query_id"].isin(new_id)].copy()
+        detailed["query_id"] = detailed["query_id"].map(new_id)
+        detailed = detailed.sort_values("query_id", kind="stable").reset_index(drop=True)
+        print(f"      (scores reused from {source}, no inference)")
+        return detailed
+
+    def _select_queries(self, source, stem, bench_path, filter_set) -> Optional[List[int]]:
+        """Query ids of the source file that make up the derived benchmark, in
+        the derived file's order (None: it isn't a subset of the source)."""
+        source_df = self._benchmark_cache[source].df
+
+        if filter_set is not None:
+            targets = self._injected_items(filter_set)
+            return [q for q, imps in enumerate(source_df["impressions"]) if imps[0][0] in targets]
+
+        def key(row):
+            return (str(row.user_id), tuple(row.history_ids), tuple(c[0] for c in row.impressions))
+
+        by_key: Dict[tuple, List[int]] = {}
+        for q, row in enumerate(source_df.itertuples(index=False)):
+            by_key.setdefault(key(row), []).append(q)
+        query_ids = []
+        for row in to_groups(read_model_csv(bench_path)).itertuples(index=False):
+            match = by_key.get(key(row))
+            if not match:
+                print(f"      ⚠️  {stem} has queries not in {source}: running inference on it")
+                return None
+            query_ids.append(match.pop(0))
+        return query_ids
 
     def _run_inference(self, model, dataloader) -> pd.DataFrame:
         """Score every candidate; padded candidates are masked out."""
