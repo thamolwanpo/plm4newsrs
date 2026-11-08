@@ -302,6 +302,7 @@ python scripts/train.py --config configs/experiments/nrms/nrms_glove.yaml --pois
 | `--data-root DIR` | fakeun-dataprep output folder of the dataset |
 | `--train-all` | Train the clean model on three consecutive seeds starting at `seed`, and one model per poisoned set |
 | `--poison-sets A…` | Poisoned sets for `--train-all` (default: all in `stage4/`) |
+| `--run-name NAME` | Output name of a single run, e.g. `clean_seed43` to train one `--train-all` run on its own |
 | `--skip-existing` | Skip runs that already finished; retrain unfinished ones from scratch (see below) |
 | `--model-type clean\|poisoned` | Train a single model |
 | `--poison-set A_r…_s…` | Poisoned set of the single model (implies `--model-type poisoned`) |
