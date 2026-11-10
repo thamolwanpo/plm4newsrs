@@ -5,6 +5,20 @@ import pandas as pd
 from typing import List, Dict, Optional
 from .utility import safe_divide
 
+def _worst_case_order(group: pd.DataFrame) -> pd.DataFrame:
+    """Candidates of one group, best first, in the order least favourable to the model.
+
+    A NaN score puts a fake item at the top and a real item at the bottom, and
+    on a tie the fake item comes first, so neither NaN nor ties can lower the
+    measured exposure (as ranking.py counts NaN and ties against the target).
+    """
+    fake = group["is_fake"].astype(bool)
+    key = group["score"].astype(float).copy()
+    key[key.isna() & fake] = np.inf
+    key[key.isna() & ~fake] = -np.inf
+    order = np.lexsort((-fake.to_numpy(dtype=int), -key.to_numpy()))
+    return group.iloc[order]
+
 
 def calculate_mc_at_k(results_df: pd.DataFrame, k: int, group_by: str = "user_id") -> float:
     """
@@ -38,7 +52,7 @@ def calculate_mc_at_k(results_df: pd.DataFrame, k: int, group_by: str = "user_id
 
     for _, group in results_df.groupby(group_by):
         # Sort by score descending and take top-k
-        top_k = group.nlargest(k, "score")
+        top_k = _worst_case_order(group).head(k)
 
         # Count fake news in top-k
         fake_count = top_k["is_fake"].sum()
@@ -85,7 +99,7 @@ def calculate_fake_exposure(
 
     for _, group in results_df.groupby(group_by):
         # Sort by score descending
-        sorted_group = group.sort_values("score", ascending=False).reset_index(drop=True)
+        sorted_group = _worst_case_order(group).reset_index(drop=True)
 
         # Get top-k
         top_k = sorted_group.head(k)

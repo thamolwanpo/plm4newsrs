@@ -351,28 +351,21 @@ class ModelEvaluator:
         return metrics
 
     def _run_inference(self, model, dataloader) -> pd.DataFrame:
-        """Score every candidate; padded candidates are masked out."""
-        columns = {k: [] for k in ("query_id", "user_id", "news_id", "score", "label", "is_fake")}
-        use_amp = self.device.type == "cuda"
-
+        """Score every candidate in float32; rank by the raw scores (softmax kept as 'prob')."""
+        columns = {k: [] for k in ("query_id", "user_id", "news_id", "score", "prob", "label", "is_fake")}
         with torch.inference_mode():
             for batch in tqdm(dataloader, desc="Inference", leave=False):
                 if batch is None:
                     continue
-
                 batch_tensors = {
                     k: v.to(self.device) if isinstance(v, torch.Tensor) else v
                     for k, v in batch.items()
                 }
-                with torch.amp.autocast(device_type=self.device.type, enabled=use_amp):
-                    scores = model(batch_tensors)
-
-                scores = scores.float()
+                scores = model(batch_tensors).float()  # no autocast: fp32 scores
                 n_cand = batch_tensors["num_candidates"]
-                pad_mask = torch.arange(scores.size(1), device=scores.device)[None, :] >= n_cand[
-                    :, None
-                ]
-                scores = torch.softmax(scores.masked_fill(pad_mask, float("-inf")), dim=1)
+                pad_mask = torch.arange(scores.size(1), device=scores.device)[None, :] >= n_cand[:, None]
+                scores = scores.masked_fill(pad_mask, float("-inf"))
+                probs = torch.softmax(scores, dim=1).cpu().numpy()
                 scores = scores.cpu().numpy()
 
                 for i, impression in enumerate(batch["impression_data"]):
@@ -381,12 +374,14 @@ class ModelEvaluator:
                     columns["query_id"].extend([batch["query_id"][i]] * n_items)
                     columns["user_id"].extend([batch["user_id"][i]] * n_items)
                     columns["news_id"].extend(news_ids)
-                    columns["score"].extend(scores[i][:n_items])
+                    columns["score"].extend(scores[i][:n_items])  # raw score: used for ranking
+                    columns["prob"].extend(probs[i][:n_items])
                     columns["label"].extend(labels)
                     columns["is_fake"].extend(is_fakes)
 
         df = pd.DataFrame(columns)
         df["score"] = df["score"].astype(float)
+        df["prob"] = df["prob"].astype(float)
         df["label"] = df["label"].astype(int)
         df["is_fake"] = df["is_fake"].astype(int)
         return df
