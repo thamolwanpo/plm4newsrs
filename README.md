@@ -302,6 +302,7 @@ python scripts/train.py --config configs/experiments/nrms/nrms_glove.yaml --pois
 | `--data-root DIR` | fakeun-dataprep output folder of the dataset |
 | `--train-all` | Train the clean model on three consecutive seeds starting at `seed`, and one model per poisoned set |
 | `--poison-sets A…` | Poisoned sets for `--train-all` (default: all in `stage4/`) |
+| `--run-name NAME` | Output name of a single run, e.g. `clean_seed43` to train one `--train-all` run on its own |
 | `--skip-existing` | Skip runs that already finished; retrain unfinished ones from scratch (see below) |
 | `--model-type clean\|poisoned` | Train a single model |
 | `--poison-set A_r…_s…` | Poisoned set of the single model (implies `--model-type poisoned`) |
@@ -426,6 +427,15 @@ python scripts/evaluate.py --config configs/experiments/nrms/nrms_glove.yaml \
   (its reference value), each poisoned model on its own set. Compare
   `clean` vs `poisoned_A_r0.5_s1` on `poison_probe_realneg@A_r0.5_s1`.
 - Report `adversarial` separately from `pattern_probe`; never average them.
+- The model runs once per file. `standard_clean` / `standard_mixed` (same
+  queries and negatives as `standard`, split) and the `@<set>` subsets are cut
+  from the scores of `standard` / the probe file, with no extra inference. A
+  subset benchmark evaluated without its source file (e.g.
+  `--benchmarks standard_mixed`) gets its own inference run.
+- So the default run costs one inference pass per file, on 6 files:
+  `standard`, `adversarial` and the four probes. Leaving out the
+  mixed-negative probes (`--benchmarks standard standard_clean standard_mixed
+  adversarial pattern_probe_realneg poison_probe_realneg`) brings it down to 4.
 
 **Metrics** (averaged over queries): `AUC` (share of negatives scored below the
 target), `MRR`, `NDCG@5/10`, `HR@5/10`, `mean_rank`, `mean_percentile`
