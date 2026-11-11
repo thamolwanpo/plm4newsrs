@@ -269,9 +269,15 @@ def get_training_runs(config) -> List[tuple]:
     return clean_runs + poisoned_runs
 
 
-def get_reference_runs(config, num_seeds: int = 3, include_flag_100: bool = False) -> List[dict]:
+def get_reference_runs(
+    config,
+    num_seeds: int = 3,
+    include_flag_100: bool = False,
+    reference_types=("oracle", "retrain"),
+) -> List[dict]:
     """Runs of --train-references, per poisoned set: the oracle, then the
     retrain model of each flag level, each on num_seeds consecutive seeds.
+    reference_types limits them to "oracle" and/or "retrain".
 
     Each run is a dict: model_type, poison_set, flag_level, seed, run_name.
     """
@@ -280,13 +286,16 @@ def get_reference_runs(config, num_seeds: int = 3, include_flag_100: bool = Fals
     runs = []
     for poison_set in poison_sets:
         overrides = []
-        if (config.poison_set_dir(poison_set) / "clean_oracle_model.csv").exists():
+        if "oracle" not in reference_types:
+            pass
+        elif (config.poison_set_dir(poison_set) / "clean_oracle_model.csv").exists():
             overrides.append({"model_type": "oracle", "poison_set": poison_set,
                               "flag_level": None})
         else:
             print(f"⚠️ {poison_set}: no clean_oracle_model.csv - oracle skipped")
         available = config.discover_flag_levels(poison_set)
-        for flag_level in config.flag_levels or available:
+        flag_levels = (config.flag_levels or available) if "retrain" in reference_types else []
+        for flag_level in flag_levels:
             if flag_level == "flag_100" and not include_flag_100:
                 continue  # identical to the oracle's training file
             if flag_level not in available:
@@ -335,6 +344,7 @@ def train_reference_models(
     skip_existing: bool = False,
     num_seeds: int = 3,
     include_flag_100: bool = False,
+    reference_types=("oracle", "retrain"),
 ) -> Dict[str, str]:
     """
     Train the clean references of every poisoned set, on num_seeds seeds:
@@ -349,11 +359,12 @@ def train_reference_models(
         num_seeds: seeds per training file, config.seed, config.seed + 1, ...
         include_flag_100: also train flag_100, whose file is identical to the
             oracle's (skipped by default: the oracle is the flag_100 retrain)
+        reference_types: "oracle" and/or "retrain" (default both)
 
     Returns:
         Dictionary mapping run name to checkpoint path
     """
-    runs = get_reference_runs(config, num_seeds, include_flag_100)
+    runs = get_reference_runs(config, num_seeds, include_flag_100, reference_types)
     if not runs:
         print(
             f"⚠️ No clean references (clean_oracle_model.csv / clean_flagged_model.csv) "

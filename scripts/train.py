@@ -37,6 +37,10 @@ Examples:
   # oracle + retrain-without-forget-set per flag level, three seeds each
   python scripts/train.py --config configs/experiments/nrms/nrms_glove.yaml --train-references
 
+  # Only the oracle of three poisoned sets
+  python scripts/train.py --config configs/experiments/nrms/nrms_glove.yaml --train-references \\
+      --reference-types oracle --poison-sets A_r0.5_s1 A_r0.5_s2 A_r0.5_s3
+
   # One retrain-without-forget-set model (flags/flag_050/clean_flagged_model.csv)
   python scripts/train.py --config configs/experiments/nrms/nrms_glove.yaml \\
       --model-type retrain --poison-set A_r0.5_s1 --flag-level 50 --seed 42
@@ -155,6 +159,15 @@ Examples:
         type=int,
         default=3,
         help="Seeds per training file for --train-references, starting at seed (default: 3)",
+    )
+    parser.add_argument(
+        "--reference-types",
+        type=str,
+        nargs="+",
+        choices=["oracle", "retrain"],
+        default=["oracle", "retrain"],
+        help="--train-references: which references to train (default: both), "
+        "e.g. --reference-types oracle",
     )
     parser.add_argument(
         "--include-flag-100",
@@ -317,6 +330,7 @@ Examples:
                 skip_existing=args.skip_existing,
                 num_seeds=args.num_seeds,
                 include_flag_100=args.include_flag_100,
+                reference_types=args.reference_types,
             )
             if not trained_models:
                 return 1
