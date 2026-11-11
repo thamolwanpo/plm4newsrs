@@ -9,8 +9,13 @@
 #
 # MODE=references trains (and evaluates) only the clean references of every
 # poisoned set (oracle + retrain per flag level, three seeds each), not the
-# clean / poisoned models:
+# clean / poisoned models; MODE=oracle only the oracle:
 #   MODE=references nohup ./train.sh > /dev/null 2>&1 &
+#   MODE=oracle POISON_SETS="A_r0.5_s1 A_r0.5_s2 A_r0.5_s3" nohup ./train.sh > /dev/null 2>&1 &
+# With MODE=references / oracle, also:
+#   POISON_SETS  poisoned sets to train references for (default: all in stage4/)
+#   FLAG_LEVELS  flag levels of the retrain models, e.g. "flag_050" (default: all but 100)
+#   NUM_SEEDS    seeds per file (default: 3)
 
 LOG_DIR="logs"
 mkdir -p "$LOG_DIR"
@@ -44,9 +49,16 @@ run_and_log() {
     fi
 }
 
-if [ "$MODE" = "references" ]; then
-    TRAIN_ARGS=(--train-references --skip-existing)
-    EVAL_ARGS=(--models oracle retrain)
+if [ "$MODE" = "references" ] || [ "$MODE" = "oracle" ]; then
+    TRAIN_ARGS=(--train-references --skip-existing --num-seeds "${NUM_SEEDS:-3}")
+    if [ "$MODE" = "oracle" ]; then
+        TRAIN_ARGS+=(--reference-types oracle)
+        EVAL_ARGS=(--models oracle)
+    else
+        EVAL_ARGS=(--models oracle retrain)
+    fi
+    [ -n "$POISON_SETS" ] && TRAIN_ARGS+=(--poison-sets $POISON_SETS)
+    [ -n "$FLAG_LEVELS" ] && TRAIN_ARGS+=(--flag-levels $FLAG_LEVELS)
 else
     TRAIN_ARGS=(--train-all)
     EVAL_ARGS=()
