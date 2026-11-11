@@ -34,7 +34,7 @@ early_stopping_patience: 3
 
 # Paths
 base_dir: null
-data_root: '/home/thamolwan/Documents/P2/data/politifact'  # fakeun-dataprep output for the dataset (default: data/problem2/{dataset})
+data_root: '/run/media/thamolwan/PhD_Disk2TB/P2/data/politifact'  # fakeun-dataprep output for the dataset (default: data/problem2/{dataset})
 
 # Reproducibility
 seed: 42
