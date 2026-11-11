@@ -330,6 +330,13 @@ python scripts/train.py --config configs/experiments/nrms/nrms_glove.yaml --trai
 python scripts/train.py --config configs/experiments/nrms/nrms_glove.yaml --train-references \
     --poison-sets A_r0.5_s1 --flag-levels 20 50 --num-seeds 2 --skip-existing
 
+# Only the oracle (no retrain models), three poisoned sets
+python scripts/train.py --config configs/experiments/nrms/nrms_glove.yaml --train-references \
+    --reference-types oracle --poison-sets A_r0.5_s1 A_r0.5_s2 A_r0.5_s3
+
+# The same with train.sh (MODE=references for oracle + retrain)
+MODE=oracle POISON_SETS="A_r0.5_s1 A_r0.5_s2 A_r0.5_s3" nohup ./train.sh > /dev/null 2>&1 &
+
 # A single reference model
 python scripts/train.py --config configs/experiments/nrms/nrms_glove.yaml \
     --model-type oracle --poison-set A_r0.5_s1 --seed 42
@@ -361,6 +368,7 @@ The references are evaluated like poisoned models: every benchmark, plus
 | `--num-seeds N` | Seeds per file for `--train-references` (default 3) |
 | `--flag-levels 10 50 …` | Flag levels for `--train-references` (default: all found, except 100) |
 | `--include-flag-100` | `--train-references`: also train `flag_100` (identical to the oracle) |
+| `--reference-types oracle` | `--train-references`: only the oracle (or only `retrain`; default both) |
 | `--poison-sets A…` | Poisoned sets for `--train-all` / `--train-references` (default: all in `stage4/`) |
 | `--run-name NAME` | Output name of a single run, e.g. `clean_seed43` to train one `--train-all` run on its own |
 | `--skip-existing` | Skip runs that already finished; retrain unfinished ones from scratch (see below) |
