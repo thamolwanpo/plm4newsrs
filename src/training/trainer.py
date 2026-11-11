@@ -253,28 +253,28 @@ def skip_or_prepare_run(config, run_name: str) -> Optional[str]:
     return None
 
 
-def get_training_runs(config) -> List[dict]:
-    """Runs of --train-all: three clean seeds + one model per poisoned set.
+def get_training_runs(config) -> List[tuple]:
+    """(model_type, poison_set, seed, run_name) entries for --train-all.
 
-    Each run is a dict of config overrides plus its run_name.
+    run_name is None for poisoned runs (their default 'poisoned_{set}').
     """
     poison_sets = config.poison_sets or config.discover_poison_sets()
     clean_runs = [
-        {"model_type": "clean", "poison_set": None, "flag_level": None, "seed": seed,
-         "run_name": f"clean_seed{seed}"}
+        ("clean", None, seed, f"clean_seed{seed}")
         for seed in range(config.seed, config.seed + 3)
     ]
     poisoned_runs = [
-        {"model_type": "poisoned", "poison_set": poison_set, "flag_level": None,
-         "seed": config.seed, "run_name": f"poisoned_{poison_set}"}
-        for poison_set in poison_sets
+        ("poisoned", poison_set, config.seed, None) for poison_set in poison_sets
     ]
     return clean_runs + poisoned_runs
 
 
 def get_reference_runs(config, num_seeds: int = 3, include_flag_100: bool = False) -> List[dict]:
     """Runs of --train-references, per poisoned set: the oracle, then the
-    retrain model of each flag level, each on num_seeds consecutive seeds."""
+    retrain model of each flag level, each on num_seeds consecutive seeds.
+
+    Each run is a dict: model_type, poison_set, flag_level, seed, run_name.
+    """
     poison_sets = config.poison_sets or config.discover_poison_sets()
     seeds = range(config.seed, config.seed + num_seeds)
     runs = []
@@ -319,7 +319,11 @@ def train_all_models(
     Returns:
         Dictionary mapping run name to checkpoint path
     """
-    runs = get_training_runs(config)
+    runs = [
+        {"model_type": model_type, "poison_set": poison_set, "flag_level": None, "seed": seed,
+         "run_name": run_name or f"{model_type}_{poison_set}"}
+        for model_type, poison_set, seed, run_name in get_training_runs(config)
+    ]
     if not any(run["model_type"] == "poisoned" for run in runs):
         print(f"⚠️ No poisoned sets found in {config.data_root / 'stage4'}")
     return train_runs(config, runs, device, skip_existing)
