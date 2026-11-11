@@ -57,13 +57,29 @@ def split_epoch(model_name: str) -> Tuple[str, Optional[int]]:
     return model_name[: match.start()], int(match["epoch"])
 
 
+# Clean references of a poisoned set (see configs.base_config.BaseConfig.run_name)
+REFERENCE_RUN = re.compile(
+    r"^(?P<type>oracle|retrain)_(?P<set>A_.+?)(?:-(?P<flag>flag_\d{3}))?_seed\d+$"
+)
+
+
 def parse_run_name(run_name: str) -> Tuple[str, Optional[str]]:
-    """Parse 'clean', 'clean_seed42', or 'poisoned_A_r0.5_s1' run names (epoch suffix ignored)."""
+    """(model type, poisoned set) of a run name (epoch suffix ignored).
+
+    'clean', 'clean_seed42'                  -> ('clean', None)
+    'poisoned_A_r0.5_s1', '..._seed43'       -> ('poisoned', 'A_r0.5_s1')
+    'oracle_A_r0.5_s1_seed42'                -> ('oracle', 'A_r0.5_s1')
+    'retrain_A_r0.5_s1-flag_050_seed42'      -> ('retrain', 'A_r0.5_s1')
+    """
     run_name, _ = split_epoch(run_name)
     if run_name == "clean" or re.fullmatch(r"clean_seed\d+", run_name):
         return "clean", None
     if run_name.startswith("poisoned_"):
-        return "poisoned", run_name[len("poisoned_") :]
+        # extra poisoned seeds trained with --run-name poisoned_<set>_seed43
+        return "poisoned", re.sub(r"_seed\d+$", "", run_name[len("poisoned_") :])
+    match = REFERENCE_RUN.match(run_name)
+    if match:
+        return match["type"], match["set"]
     return run_name, None
 
 
@@ -75,7 +91,8 @@ class ModelEvaluator:
     - poison_probe*.csv cover the whole poisoning pool. They are also evaluated
       per poisoned set, restricted to that set's injected items
       (stage4/A_.../A_fake_items.csv), as "<benchmark>@<A set>": the clean
-      model on every poisoned set (its reference), a poisoned model on its own.
+      model on every poisoned set (its reference), a poisoned model and its
+      clean references (oracle_*, retrain_*) on their own.
     - Inference runs once per file. "<benchmark>@<set>" and the SUBSET_OF
       files are cut from the scores of the file they come from, when the
       same model was already evaluated on it (the plan's order guarantees
@@ -212,8 +229,10 @@ class ModelEvaluator:
         model_type, own_set = parse_run_name(run_name)
         if model_type == "clean":
             filter_sets = self.config.poison_sets or self.config.discover_poison_sets()
-        else:
+        elif own_set:
             filter_sets = [own_set]
+        else:
+            filter_sets = []
 
         plan = []
         for path in benchmark_files:

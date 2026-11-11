@@ -13,7 +13,7 @@ import torch
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from configs import load_config, create_config
-from src.training import train_model, train_all_models
+from src.training import train_model, train_all_models, train_reference_models
 from src.training.trainer import skip_or_prepare_run
 from src.utils.seed import set_seed
 
@@ -32,6 +32,14 @@ Examples:
 
   # Clean models on three consecutive seeds + every poisoned set found in stage4/
   python scripts/train.py --config configs/experiments/nrms/nrms_glove.yaml --train-all
+
+  # Only the clean references of every poisoned set (no clean / poisoned model):
+  # oracle + retrain-without-forget-set per flag level, three seeds each
+  python scripts/train.py --config configs/experiments/nrms/nrms_glove.yaml --train-references
+
+  # One retrain-without-forget-set model (flags/flag_050/clean_flagged_model.csv)
+  python scripts/train.py --config configs/experiments/nrms/nrms_glove.yaml \\
+      --model-type retrain --poison-set A_r0.5_s1 --flag-level 50 --seed 42
 
   # Point at the fakeun-dataprep output and override hyperparameters
   python scripts/train.py --config configs/experiments/nrms/nrms_glove.yaml --train-all \\
@@ -58,8 +66,10 @@ Examples:
     parser.add_argument(
         "--model-type",
         type=str,
-        choices=["clean", "poisoned"],
-        help="clean (stage3/train_clean_model.csv) or poisoned (stage4/<poison-set>/train_model.csv)",
+        choices=["clean", "poisoned", "oracle", "retrain"],
+        help="clean (stage3/train_clean_model.csv), poisoned (stage4/<poison-set>/train_model.csv), "
+        "oracle (stage4/<poison-set>/clean_oracle_model.csv) or retrain "
+        "(stage4/<poison-set>/flags/<flag-level>/clean_flagged_model.csv)",
     )
     parser.add_argument(
         "--poison-set",
@@ -70,7 +80,20 @@ Examples:
         "--poison-sets",
         type=str,
         nargs="+",
-        help="Poisoned sets trained by --train-all (default: every stage4/A_* folder)",
+        help="Poisoned sets trained by --train-all / --train-references "
+        "(default: every stage4/A_* folder)",
+    )
+    parser.add_argument(
+        "--flag-level",
+        type=str,
+        help="Flag level of a retrain model: 10, 20, 50, 80, 100 or flag_050",
+    )
+    parser.add_argument(
+        "--flag-levels",
+        type=str,
+        nargs="+",
+        help="Flag levels trained by --train-references (default: every level found; "
+        "flag_100 only with --include-flag-100)",
     )
 
     # ========== Training Options ==========
@@ -120,6 +143,23 @@ Examples:
         "--train-all",
         action="store_true",
         help="Train the clean model on three consecutive seeds, plus one model per poisoned set",
+    )
+    parser.add_argument(
+        "--train-references",
+        action="store_true",
+        help="Train only the clean references of every poisoned set: the oracle and one "
+        "retrain model per flag level, on --num-seeds seeds each (no clean / poisoned model)",
+    )
+    parser.add_argument(
+        "--num-seeds",
+        type=int,
+        default=3,
+        help="Seeds per training file for --train-references, starting at seed (default: 3)",
+    )
+    parser.add_argument(
+        "--include-flag-100",
+        action="store_true",
+        help="--train-references: also train flag_100, whose file is identical to the oracle's",
     )
     parser.add_argument(
         "--run-name",
@@ -181,6 +221,10 @@ Examples:
         overrides.setdefault("model_type", "poisoned")
     if args.poison_sets:
         overrides["poison_sets"] = args.poison_sets
+    if args.flag_level:
+        overrides["flag_level"] = args.flag_level
+    if args.flag_levels:
+        overrides["flag_levels"] = args.flag_levels
 
     # Training options
     if args.epochs:
@@ -257,6 +301,31 @@ Examples:
             print(f"\n⚠️ Resume training not yet implemented")
             print(f"Checkpoint: {args.resume}")
             return 1
+
+        elif args.train_all and args.train_references:
+            parser.error("Use --train-all or --train-references, not both")
+
+        elif args.train_references:
+            if args.run_name:
+                parser.error("--run-name names a single run; it cannot be used with --train-references")
+            print("\n" + "=" * 70)
+            print("TRAINING CLEAN REFERENCES (oracle + retrain per flag level)")
+            print("=" * 70)
+            trained_models = train_reference_models(
+                config,
+                device,
+                skip_existing=args.skip_existing,
+                num_seeds=args.num_seeds,
+                include_flag_100=args.include_flag_100,
+            )
+            if not trained_models:
+                return 1
+
+            print("\n" + "=" * 70)
+            print("TRAINING SUMMARY")
+            print("=" * 70)
+            for run_name, checkpoint_path in trained_models.items():
+                print(f"✅ {run_name}: {checkpoint_path}")
 
         elif args.train_all:
             if args.run_name:

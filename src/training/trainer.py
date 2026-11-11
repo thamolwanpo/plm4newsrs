@@ -253,17 +253,55 @@ def skip_or_prepare_run(config, run_name: str) -> Optional[str]:
     return None
 
 
-def get_training_runs(config) -> List[tuple]:
-    """(model_type, poison_set, seed, run_name) entries for --train-all."""
+def get_training_runs(config) -> List[dict]:
+    """Runs of --train-all: three clean seeds + one model per poisoned set.
+
+    Each run is a dict of config overrides plus its run_name.
+    """
     poison_sets = config.poison_sets or config.discover_poison_sets()
     clean_runs = [
-        ("clean", None, seed, f"clean_seed{seed}")
+        {"model_type": "clean", "poison_set": None, "flag_level": None, "seed": seed,
+         "run_name": f"clean_seed{seed}"}
         for seed in range(config.seed, config.seed + 3)
     ]
     poisoned_runs = [
-        ("poisoned", poison_set, config.seed, None) for poison_set in poison_sets
+        {"model_type": "poisoned", "poison_set": poison_set, "flag_level": None,
+         "seed": config.seed, "run_name": f"poisoned_{poison_set}"}
+        for poison_set in poison_sets
     ]
     return clean_runs + poisoned_runs
+
+
+def get_reference_runs(config, num_seeds: int = 3, include_flag_100: bool = False) -> List[dict]:
+    """Runs of --train-references, per poisoned set: the oracle, then the
+    retrain model of each flag level, each on num_seeds consecutive seeds."""
+    poison_sets = config.poison_sets or config.discover_poison_sets()
+    seeds = range(config.seed, config.seed + num_seeds)
+    runs = []
+    for poison_set in poison_sets:
+        overrides = []
+        if (config.poison_set_dir(poison_set) / "clean_oracle_model.csv").exists():
+            overrides.append({"model_type": "oracle", "poison_set": poison_set,
+                              "flag_level": None})
+        else:
+            print(f"⚠️ {poison_set}: no clean_oracle_model.csv - oracle skipped")
+        available = config.discover_flag_levels(poison_set)
+        for flag_level in config.flag_levels or available:
+            if flag_level == "flag_100" and not include_flag_100:
+                continue  # identical to the oracle's training file
+            if flag_level not in available:
+                print(f"⚠️ {poison_set}: no {flag_level}/clean_flagged_model.csv - skipped")
+                continue
+            overrides.append({"model_type": "retrain", "poison_set": poison_set,
+                              "flag_level": flag_level})
+        for override in overrides:
+            for seed in seeds:
+                run_config = copy.copy(config)
+                for key, value in override.items():
+                    setattr(run_config, key, value)
+                run_config.seed = seed
+                runs.append({**override, "seed": seed, "run_name": run_config.run_name})
+    return runs
 
 
 def train_all_models(
@@ -281,19 +319,56 @@ def train_all_models(
     Returns:
         Dictionary mapping run name to checkpoint path
     """
+    runs = get_training_runs(config)
+    if not any(run["model_type"] == "poisoned" for run in runs):
+        print(f"⚠️ No poisoned sets found in {config.data_root / 'stage4'}")
+    return train_runs(config, runs, device, skip_existing)
+
+
+def train_reference_models(
+    config,
+    device: Optional[torch.device] = None,
+    skip_existing: bool = False,
+    num_seeds: int = 3,
+    include_flag_100: bool = False,
+) -> Dict[str, str]:
+    """
+    Train the clean references of every poisoned set, on num_seeds seeds:
+    the oracle (clean_oracle_model.csv) and one retrain-without-forget-set
+    model per flag level (clean_flagged_model.csv). Clean and poisoned
+    models are not trained.
+
+    Args:
+        config: Base configuration (copied for each run)
+        device: Device to train on (auto-detected if None)
+        skip_existing: see train_all_models
+        num_seeds: seeds per training file, config.seed, config.seed + 1, ...
+        include_flag_100: also train flag_100, whose file is identical to the
+            oracle's (skipped by default: the oracle is the flag_100 retrain)
+
+    Returns:
+        Dictionary mapping run name to checkpoint path
+    """
+    runs = get_reference_runs(config, num_seeds, include_flag_100)
+    if not runs:
+        print(
+            f"⚠️ No clean references (clean_oracle_model.csv / clean_flagged_model.csv) "
+            f"found in {config.data_root / 'stage4'}; rerun fakeun-dataprep"
+        )
+        return {}
+    return train_runs(config, runs, device, skip_existing)
+
+
+def train_runs(
+    config, runs: List[dict], device: Optional[torch.device] = None, skip_existing: bool = False
+) -> Dict[str, str]:
+    """Train each run (config overrides + run_name) one after the other."""
     set_seed(config.seed)
 
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    runs = get_training_runs(config)
-    if not any(model_type == "poisoned" for model_type, _, _, _ in runs):
-        print(f"⚠️ No poisoned sets found in {config.data_root / 'stage4'}")
-
-    run_names = [
-        run_name or f"{model_type}_{poison_set}"
-        for model_type, poison_set, _, run_name in runs
-    ]
+    run_names = [run["run_name"] for run in runs]
     print("\n" + "=" * 70)
     print(f"TRAINING ALL MODELS: {', '.join(run_names)}")
     print("=" * 70)
@@ -302,12 +377,12 @@ def train_all_models(
     skipped_models = []
     failed_models = []
 
-    for i, (model_type, poison_set, seed, run_name) in enumerate(runs, 1):
+    for i, run in enumerate(runs, 1):
         model_config = copy.deepcopy(config)
-        model_config.model_type = model_type
-        model_config.poison_set = poison_set
-        model_config.seed = seed
-        run_name = run_name or model_config.run_name
+        for key, value in run.items():
+            if key != "run_name":
+                setattr(model_config, key, value)
+        run_name = run["run_name"]
 
         print(f"\n{'='*70}")
         print(f"TRAINING [{i}/{len(runs)}]: {run_name}")

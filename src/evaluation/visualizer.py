@@ -529,6 +529,10 @@ class EvaluationVisualizer:
                 return "lightgreen"
             if name.startswith("poisoned"):
                 return "lightcoral"
+            if name.startswith("oracle"):
+                return "mediumseagreen"
+            if name.startswith("retrain"):
+                return "lightskyblue"
             return "lightgray"
 
         return [color(m) for m in models]

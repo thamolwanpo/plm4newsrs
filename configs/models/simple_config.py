@@ -100,8 +100,10 @@ class ModelConfig(BaseConfig):
         print(f"Dataset: {self.dataset}")
         print(f"Experiment: {self.experiment_name}")
         print(f"Model Type: {self.model_type}")
-        if self.model_type == "poisoned":
+        if self.model_type != "clean":
             print(f"Poison Set: {self.poison_set}")
+        if self.model_type == "retrain":
+            print(f"Flag Level: {self.flag_level}")
         print(f"Data Root: {self.data_root}")
         print(f"Language Model: {self.model_name}")
         print(f"  - Use Pretrained: {self.use_pretrained_lm}")

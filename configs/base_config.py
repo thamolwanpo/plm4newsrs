@@ -3,6 +3,16 @@ from pathlib import Path
 from typing import Optional, Dict, Any, List
 import yaml
 
+MODEL_TYPES = ("clean", "poisoned", "oracle", "retrain")
+
+
+def flag_level_name(flag_level) -> str:
+    """50, "50", "flag_050" -> "flag_050"."""
+    text = str(flag_level)
+    if text.startswith("flag_"):
+        return text
+    return f"flag_{int(float(text)):03d}"
+
 
 @dataclass
 class BaseConfig:
@@ -17,6 +27,10 @@ class BaseConfig:
           stage3/val_model.csv              <- validation (shared by all models)
           stage4/A_r{ratio}_s{seed}/train_model.csv  <- poisoned training sets
           stage4/A_r{ratio}_s{seed}/A_fake_items.csv <- injected fake items
+          stage4/A_r{ratio}_s{seed}/clean_oracle_model.csv
+              <- oracle clean reference (every fake click removed)
+          stage4/A_r{ratio}_s{seed}/flags/flag_{NNN}/clean_flagged_model.csv
+              <- retrain-without-forget-set reference (flagged clicks removed)
           stage6/*.csv                      <- evaluation benchmarks
     """
 
@@ -27,12 +41,23 @@ class BaseConfig:
     # Dataset configuration
     dataset: str = "politifact"
     experiment_name: str = "experiment_1"
-    model_type: str = "clean"  # "clean" | "poisoned"
+    # "clean"    stage3/train_clean_model.csv (no fake at all, not even as negatives)
+    # "poisoned" stage4/<poison_set>/train_model.csv
+    # "oracle"   stage4/<poison_set>/clean_oracle_model.csv
+    # "retrain"  stage4/<poison_set>/flags/<flag_level>/clean_flagged_model.csv
+    # oracle / retrain are the clean references of a poisoned set: fake clicks
+    # removed (all of them / the flagged ones), fakes kept as negatives.
+    model_type: str = "clean"
     # Poisoned training set (stage4 folder name, e.g. "A_r0.5_s1").
-    # Required when model_type == "poisoned".
+    # Required when model_type is "poisoned", "oracle" or "retrain".
     poison_set: Optional[str] = None
-    # Poisoned sets trained by --train-all (None = every A_* folder in stage4).
+    # Poisoned sets trained by --train-all / --train-references
+    # (None = every A_* folder in stage4).
     poison_sets: Optional[List[str]] = None
+    # Flag level of a "retrain" model, e.g. "flag_050" (50 and "50" also work).
+    flag_level: Optional[str] = None
+    # Flag levels trained by --train-references (None = every flag level found).
+    flag_levels: Optional[List[str]] = None
 
     # Training hyperparameters
     epochs: int = 10
@@ -66,19 +91,43 @@ class BaseConfig:
         else:
             self.data_root = Path(self.data_root)
 
+        if self.flag_level is not None:
+            self.flag_level = flag_level_name(self.flag_level)
+        if self.flag_levels:
+            self.flag_levels = [flag_level_name(f) for f in self.flag_levels]
+
     # ------------------------------------------------------------------ #
     # Data paths
     # ------------------------------------------------------------------ #
     @property
     def run_name(self) -> str:
-        """Name of the trained model: 'clean' or 'poisoned_{poison_set}'."""
+        """Name of the trained model.
+
+        clean     'clean'
+        poisoned  'poisoned_{poison_set}'
+        oracle    'oracle_{poison_set}_seed{seed}'
+        retrain   'retrain_{poison_set}-{flag_level}_seed{seed}'
+
+        The clean references always carry their seed: several seeds per file
+        are trained, and the poisoned vs clean gap is read against their spread.
+        """
         if self.model_type == "clean":
             return "clean"
+        if self.model_type not in MODEL_TYPES:
+            raise ValueError(
+                f"Unknown model_type: {self.model_type!r} (use one of {', '.join(MODEL_TYPES)})"
+            )
+        if not self.poison_set:
+            raise ValueError(
+                f"model_type {self.model_type!r} requires poison_set (e.g. 'A_r0.5_s1')"
+            )
         if self.model_type == "poisoned":
-            if not self.poison_set:
-                raise ValueError("model_type 'poisoned' requires poison_set (e.g. 'A_r0.5_s1')")
             return f"poisoned_{self.poison_set}"
-        raise ValueError(f"Unknown model_type: {self.model_type!r} (use 'clean' or 'poisoned')")
+        if self.model_type == "oracle":
+            return f"oracle_{self.poison_set}_seed{self.seed}"
+        if not self.flag_level:
+            raise ValueError("model_type 'retrain' requires flag_level (e.g. 'flag_050')")
+        return f"retrain_{self.poison_set}-{self.flag_level}_seed{self.seed}"
 
     @property
     def news_items_path(self) -> Path:
@@ -96,10 +145,26 @@ class BaseConfig:
     def train_csv(self) -> Path:
         if self.model_type == "clean":
             return self.data_root / "stage3" / "train_clean_model.csv"
+        if self.model_type == "oracle":
+            return self.poison_set_dir(self.poison_set) / "clean_oracle_model.csv"
+        if self.model_type == "retrain":
+            return self.flag_dir(self.poison_set, self.flag_level) / "clean_flagged_model.csv"
         return self.poison_set_dir(self.poison_set) / "train_model.csv"
 
     def poison_set_dir(self, poison_set: str) -> Path:
         return self.data_root / "stage4" / poison_set
+
+    def flag_dir(self, poison_set: str, flag_level: str) -> Path:
+        return self.poison_set_dir(poison_set) / "flags" / flag_level_name(flag_level)
+
+    def discover_flag_levels(self, poison_set: str) -> List[str]:
+        """flag_* folders of a poisoned set that contain a clean_flagged_model.csv."""
+        flags = self.poison_set_dir(poison_set) / "flags"
+        if not flags.exists():
+            return []
+        return sorted(
+            p.name for p in flags.glob("flag_*") if (p / "clean_flagged_model.csv").exists()
+        )
 
     def discover_poison_sets(self) -> List[str]:
         """All A_* folders in stage4 that contain a train_model.csv."""
