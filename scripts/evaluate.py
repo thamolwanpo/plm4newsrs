@@ -8,7 +8,7 @@ every per-epoch checkpoint of clean models as "<run>_epochNN") it evaluates:
   pattern_probe(_realneg), poison_probe(_realneg)
 plus poison_probe(_realneg)@<A set>: the poison probes restricted to the
 fake items injected into that poisoned set (clean model: every set,
-poisoned model: its own set).
+poisoned model and its clean references oracle_* / retrain_*: their own set).
 """
 
 import argparse
@@ -37,6 +37,10 @@ Examples:
   # Only the clean model and one poisoned model
   python scripts/evaluate.py --config configs/experiments/nrms/nrms_glove.yaml \\
       --models clean poisoned_A_r0.5_s1
+
+  # Only the clean references trained by train.py --train-references
+  python scripts/evaluate.py --config configs/experiments/nrms/nrms_glove.yaml \\
+      --models oracle retrain
 
   # Only some benchmarks, metrics only
   python scripts/evaluate.py --config configs/experiments/nrms/nrms_glove.yaml \\

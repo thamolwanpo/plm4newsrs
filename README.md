@@ -83,7 +83,10 @@ Files used:
 ├── stage4/
 │   └── A_r{ratio}_s{seed}/
 │       ├── train_model.csv              # training set of one POISONED model
-│       └── A_fake_items.csv             # fake items injected into it
+│       ├── A_fake_items.csv             # fake items injected into it
+│       ├── clean_oracle_model.csv       # ORACLE clean reference (all fake clicks removed)
+│       └── flags/flag_{010,020,050,080,100}/
+│           └── clean_flagged_model.csv  # RETRAIN reference (flagged fake clicks removed)
 └── stage6/                              # evaluation benchmarks
     ├── standard.csv, standard_clean.csv, standard_mixed.csv
     ├── adversarial.csv
@@ -275,8 +278,10 @@ Pre-built configs live in `configs/experiments/{simple,naml,nrms,lstur}/`.
 
 | Model | Training set | Run name / checkpoint prefix |
 |-------|--------------|------------------------------|
-| clean | `stage3/train_clean_model.csv` | `clean_seed{seed}` in `--train-all`; `clean` for a single run |
+| clean (no-fake) | `stage3/train_clean_model.csv` | `clean_seed{seed}` in `--train-all`; `clean` for a single run |
 | poisoned | `stage4/A_r{ratio}_s{seed}/train_model.csv` | `poisoned_A_r{ratio}_s{seed}` |
+| oracle | `stage4/A_…/clean_oracle_model.csv` | `oracle_A_r{ratio}_s{seed}_seed{seed}` |
+| retrain | `stage4/A_…/flags/flag_{NNN}/clean_flagged_model.csv` | `retrain_A_r{ratio}_s{seed}-flag_{NNN}_seed{seed}` |
 
 Every model is validated (early stopping, checkpoint selection on `val_auc`)
 on `stage3/val_model.csv`.
@@ -294,6 +299,57 @@ python scripts/train.py --config configs/experiments/nrms/nrms_glove.yaml --mode
 python scripts/train.py --config configs/experiments/nrms/nrms_glove.yaml --poison-set A_r0.5_s1
 ```
 
+### Clean references (oracle / retrain)
+
+fakeun-dataprep builds two clean references per poisoned set, derived from
+its `train_model.csv`: fake *clicks* are removed (as positives and from
+histories), but **fakes stay in as negatives**, and every other group,
+negative and order is the same as in the poisoned file.
+
+* **retrain** (`clean_flagged_model.csv`, one per flag level): retrain
+  without the forget set, i.e. what unlearning methods approximate;
+* **oracle** (`clean_oracle_model.csv`): every fake click of the A set
+  removed, flagged or not; the target for corrective unlearning.
+
+`stage3/train_clean_model.csv` (the `clean_seed*` models) has no fake at all,
+not even as a negative; keep it as a third, "fake never existed", reference.
+
+`--train-references` trains **only** these references, for every poisoned
+set, on `--num-seeds` seeds each (default 3: `seed`, `seed+1`, `seed+2`). It
+does not touch the clean or poisoned models: their training files did not
+change, so their checkpoints stay valid. `flag_100` is skipped by default:
+its file is identical to the oracle's (fakeun-dataprep checks this), so the
+oracle *is* the `flag_100` retrain model (`--include-flag-100` trains it
+anyway).
+
+```bash
+# All references: per poisoned set, oracle + retrain at flag 10/20/50/80, 3 seeds each
+python scripts/train.py --config configs/experiments/nrms/nrms_glove.yaml --train-references
+
+# Some poisoned sets / flag levels, two seeds, resumable
+python scripts/train.py --config configs/experiments/nrms/nrms_glove.yaml --train-references \
+    --poison-sets A_r0.5_s1 --flag-levels 20 50 --num-seeds 2 --skip-existing
+
+# A single reference model
+python scripts/train.py --config configs/experiments/nrms/nrms_glove.yaml \
+    --model-type oracle --poison-set A_r0.5_s1 --seed 42
+python scripts/train.py --config configs/experiments/nrms/nrms_glove.yaml \
+    --model-type retrain --poison-set A_r0.5_s1 --flag-level 50 --seed 43
+
+# Evaluate only the references
+python scripts/evaluate.py --config configs/experiments/nrms/nrms_glove.yaml --models oracle retrain
+```
+
+Per poisoned set this is `num_seeds × (1 + number of flag levels)` runs
+(3 × 5 = 15 with the defaults). Before training, check
+`stages.clean_references` in fakeun-dataprep's manifest: if few groups
+change, the poisoned vs clean gap may be within seed noise. The poisoned
+model is trained on one seed; for a seed spread on it too, train extra seeds
+with `--poison-set A_… --seed 43 --run-name poisoned_A_…_seed43`.
+
+The references are evaluated like poisoned models: every benchmark, plus
+`poison_probe*@<A set>` on their own poisoned set.
+
 **Key flags:**
 
 | Flag | Description |
@@ -301,11 +357,16 @@ python scripts/train.py --config configs/experiments/nrms/nrms_glove.yaml --pois
 | `--config FILE` | Path to YAML config (required) |
 | `--data-root DIR` | fakeun-dataprep output folder of the dataset |
 | `--train-all` | Train the clean model on three consecutive seeds starting at `seed`, and one model per poisoned set |
-| `--poison-sets A…` | Poisoned sets for `--train-all` (default: all in `stage4/`) |
+| `--train-references` | Train only the clean references (oracle + retrain per flag level) of every poisoned set |
+| `--num-seeds N` | Seeds per file for `--train-references` (default 3) |
+| `--flag-levels 10 50 …` | Flag levels for `--train-references` (default: all found, except 100) |
+| `--include-flag-100` | `--train-references`: also train `flag_100` (identical to the oracle) |
+| `--poison-sets A…` | Poisoned sets for `--train-all` / `--train-references` (default: all in `stage4/`) |
 | `--run-name NAME` | Output name of a single run, e.g. `clean_seed43` to train one `--train-all` run on its own |
 | `--skip-existing` | Skip runs that already finished; retrain unfinished ones from scratch (see below) |
-| `--model-type clean\|poisoned` | Train a single model |
-| `--poison-set A_r…_s…` | Poisoned set of the single model (implies `--model-type poisoned`) |
+| `--model-type clean\|poisoned\|oracle\|retrain` | Train a single model |
+| `--poison-set A_r…_s…` | Poisoned set of the single model (implies `--model-type poisoned` unless another type is given) |
+| `--flag-level 50` | Flag level of a single `retrain` model |
 | `--dataset`, `--epochs`, `--lr`, `--batch-size`, `--seed` | Overrides |
 
 The final-epoch checkpoint is saved to
@@ -387,13 +448,14 @@ per-slot columns (the user encoder does not mask padding).
 
 ```python
 from configs.config_loader import load_config
-from src.training.trainer import train_model, train_all_models
+from src.training.trainer import train_model, train_all_models, train_reference_models
 
 config = load_config("configs/experiments/nrms/nrms_glove.yaml")
 config.model_type, config.poison_set = "poisoned", "A_r0.5_s1"
 best_ckpt = train_model(config)
 
 all_ckpts = train_all_models(config)   # {"clean_seed42": ..., "clean_seed43": ..., "clean_seed44": ..., ...}
+ref_ckpts = train_reference_models(config, num_seeds=3)   # {"oracle_A_r0.5_s1_seed42": ..., "retrain_A_r0.5_s1-flag_010_seed42": ..., ...}
 ```
 
 ---

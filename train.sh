@@ -6,6 +6,11 @@
 #
 # DATA_ROOT overrides the fakeun-dataprep output folder of each config, e.g.
 #   DATA_ROOT=../fakeun-dataprep/output/problem2/politifact ./train.sh
+#
+# MODE=references trains (and evaluates) only the clean references of every
+# poisoned set (oracle + retrain per flag level, three seeds each), not the
+# clean / poisoned models:
+#   MODE=references nohup ./train.sh > /dev/null 2>&1 &
 
 LOG_DIR="logs"
 mkdir -p "$LOG_DIR"
@@ -39,9 +44,17 @@ run_and_log() {
     fi
 }
 
+if [ "$MODE" = "references" ]; then
+    TRAIN_ARGS=(--train-references --skip-existing)
+    EVAL_ARGS=(--models oracle retrain)
+else
+    TRAIN_ARGS=(--train-all)
+    EVAL_ARGS=()
+fi
+
 for CONFIG in "${CONFIGS[@]}"; do
-    run_and_log python scripts/train.py --config "$CONFIG" --train-all "${EXTRA_ARGS[@]}"
-    run_and_log python scripts/evaluate.py --config "$CONFIG" --generate-report "${EXTRA_ARGS[@]}"
+    run_and_log python scripts/train.py --config "$CONFIG" "${TRAIN_ARGS[@]}" "${EXTRA_ARGS[@]}"
+    run_and_log python scripts/evaluate.py --config "$CONFIG" --generate-report "${EVAL_ARGS[@]}" "${EXTRA_ARGS[@]}"
 done
 
 echo "All jobs in the batch are complete!" | tee -a "$GLOBAL_LOG"
