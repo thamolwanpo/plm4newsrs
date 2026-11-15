@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from configs import ModelConfig
-from src.data.preprocessing import load_news_items, read_model_csv, to_groups
+from src.data.preprocessing import load_news_items, needs_user_map, read_model_csv, to_groups
 from src.models.registry import get_model_class
 from src.training.trainer import user_map_path
 from src.utils.seed import set_seed
@@ -303,7 +303,7 @@ class ModelEvaluator:
         model.eval()
 
         user_map = None
-        if self.config.architecture == "lstur":
+        if needs_user_map(self.config.architecture):
             map_path = user_map_path(model_path.parent, split_epoch(run_name)[0])
             with open(map_path) as f:
                 user_map = json.load(f)

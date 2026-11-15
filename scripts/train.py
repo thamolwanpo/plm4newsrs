@@ -57,7 +57,7 @@ Examples:
     config_group.add_argument(
         "--architecture",
         type=str,
-        choices=["simple", "naml", "nrms", "lstur"],
+        choices=["simple", "naml", "nrms", "lstur", "lightgcn"],
         help="Model architecture (if not using config file)",
     )
 

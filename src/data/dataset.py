@@ -9,6 +9,7 @@ from configs.models.simple_config import ModelConfig
 from .preprocessing import (
     load_news_index,
     load_news_items,
+    needs_user_map,
     pad_history,
     read_model_csv,
     to_groups,
@@ -37,7 +38,7 @@ class BaseNewsDataset(Dataset):
         Args:
             csv_path: Path to a 7-column model CSV
             config: Model configuration
-            user_map: user_id -> index map (required for LSTUR)
+            user_map: user_id -> index map (required for LSTUR and LightGCN)
         """
         self.config = config
 
@@ -55,10 +56,10 @@ class BaseNewsDataset(Dataset):
         self.item_ids, self.item_is_fake = load_news_index(config.news_items_path)
         self.item_index = {item_id: i for i, item_id in enumerate(self.item_ids)}
 
-        self.use_lstur = config.architecture == "lstur"
+        self.use_user_map = needs_user_map(config.architecture)
         self.user_to_idx = user_map
-        if self.use_lstur and self.user_to_idx is None:
-            raise ValueError("LSTUR datasets need a user_map (see build_user_map)")
+        if self.use_user_map and self.user_to_idx is None:
+            raise ValueError(f"{config.architecture} datasets need a user_map (see build_user_map)")
 
     def _fix_group_sizes(self, groups):
         """Give every group exactly 1 positive + num_negatives negatives.
@@ -82,8 +83,8 @@ class BaseNewsDataset(Dataset):
         return groups[groups["impressions"].notna()].reset_index(drop=True)
 
     def _get_user_idx(self, user_id: str) -> int:
-        """User index for embedding lookup (0 = unknown user / not LSTUR)."""
-        if not self.use_lstur:
+        """User index for embedding lookup (0 = unknown user / no user map)."""
+        if not self.use_user_map:
             return 0
         return self.user_to_idx.get(str(user_id), 0)
 

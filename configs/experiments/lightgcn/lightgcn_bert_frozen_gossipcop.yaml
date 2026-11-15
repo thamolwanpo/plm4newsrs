@@ -1,0 +1,47 @@
+# Hybrid LightGCN (He et al., SIGIR 2020): graph propagation over BERT title vectors.
+# Layer-0 item = linear projection of the title's [CLS] vector (+ zero-init item ID
+# embedding); layer-0 user = user ID embedding. The graph is the training file's clicks.
+
+# Dataset configuration
+dataset: "gossipcop"
+experiment_name: "lightgcn_model"
+model_type: "clean"
+
+# Architecture
+architecture: "lightgcn"
+
+# Model configuration (title encoder)
+model_name: "bert-base-uncased"
+use_pretrained_lm: true
+fine_tune_lm: false
+finetune_layers: 0  # Number of last layers to fine-tune (BERT-base has 12 layers)
+max_seq_length: 30  # title tokens
+
+# LightGCN
+embedding_dim: 64
+num_layers: 3
+item_init: "content+id"  # "content" | "content+id"
+center_content: true  # subtract the mean [CLS] vector of all articles
+user_mode: "graph"  # "graph" | "history" | "graph+history"
+graph_edges: "positives"  # "positives" | "positives+history"
+loss: "ce"  # "ce" (as the other architectures) | "bpr" (as the paper)
+l2_reg: 1.0e-4
+
+# Training hyperparameters
+epochs: 20
+train_batch_size: 32
+val_batch_size: 64
+embedding_learning_rate: 1.0e-3  # ID embeddings + content projection
+learning_rate: 2.0e-5  # LM learning rate (unused: LM frozen)
+early_stopping_patience: 3
+
+# Paths
+base_dir: null
+data_root: null  # fakeun-dataprep output for the dataset (default: data/problem2/{dataset})
+
+# Reproducibility
+seed: 42
+
+# Additional training options
+gradient_clip_val: 1.0
+warmup_steps: 0

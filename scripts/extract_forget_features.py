@@ -105,7 +105,7 @@ def main():
     )
     parser.add_argument(
         "--user-map",
-        help="LSTUR user map (default: <checkpoint dir>/<run name>_user_map.json)",
+        help="LSTUR / LightGCN user map (default: <checkpoint dir>/<run name>_user_map.json)",
     )
     parser.add_argument(
         "--out",
@@ -166,7 +166,7 @@ def main():
 
     from src.data.collate import collate_fn
     from src.data.dataset import NewsDataset
-    from src.data.preprocessing import read_model_csv
+    from src.data.preprocessing import needs_user_map, read_model_csv
     from src.models.registry import get_model_class
     from src.training.trainer import user_map_path
 
@@ -222,7 +222,7 @@ def main():
 
         tokenizer = AutoTokenizer.from_pretrained(config.model_name)
     user_map = None
-    if config.architecture == "lstur":
+    if needs_user_map(config.architecture):
         map_path = (
             Path(args.user_map) if args.user_map else user_map_path(checkpoint.parent, run_name)
         )

@@ -14,7 +14,7 @@ from lightning.pytorch.loggers import TensorBoardLogger
 
 from src.data import NewsDataset
 from src.data.collate import collate_fn
-from src.data.preprocessing import build_user_map, read_model_csv
+from src.data.preprocessing import build_user_map, needs_user_map, read_model_csv
 from src.models.registry import get_model, get_model_class
 from src.training.dynamics import TrainingDynamicsTracker
 from src.training.presentation_log import PresentationLogger
@@ -78,14 +78,14 @@ def train_model(
         print(f"\nLoading tokenizer: {config.model_name}")
         tokenizer = AutoTokenizer.from_pretrained(config.model_name)
 
-    # LSTUR: index the users of this training set (unknown users -> 0)
+    # LSTUR / LightGCN: index the users of this training set (unknown users -> 0)
     user_map = None
-    if config.architecture == "lstur":
+    if needs_user_map(config.architecture):
         user_map = build_user_map(read_model_csv(paths["train_csv"])["user_id"])
         map_path = user_map_path(paths["checkpoints_dir"], run_name)
         with open(map_path, "w") as f:
             json.dump(user_map, f)
-        print(f"  Saved LSTUR user map ({len(user_map)} users): {map_path}")
+        print(f"  Saved {config.architecture} user map ({len(user_map)} users): {map_path}")
         config.num_users = len(user_map) + 1  # + index 0 for unknown users
 
     # Create datasets
@@ -135,7 +135,15 @@ def train_model(
     # Initialize model
     print("\nInitializing model...")
     # Select appropriate Lightning module based on architecture
+    if config.architecture == "lightgcn":
+        config.num_items = len(train_dataset.item_ids)  # nodes = rows of news_items.csv
     lit_model = get_model(config.architecture, config)
+    if hasattr(lit_model, "build_graph"):
+        # Graph models (LightGCN): interaction graph of this training file only
+        print("\nBuilding interaction graph...")
+        lit_model.build_graph(
+            paths["train_csv"], user_map, train_dataset.item_ids, train_dataset.news_titles, tokenizer
+        )
 
     # Setup logging
     logger = TensorBoardLogger(save_dir=paths["logs_dir"], name=f"logs_{run_name}")
@@ -211,7 +219,7 @@ def epoch_checkpoints(checkpoints_dir: Path, run_name: str) -> ModelCheckpoint:
 
 
 def user_map_path(checkpoints_dir: Path, run_name: str) -> Path:
-    """Where the LSTUR user map of a trained model is stored."""
+    """Where the user map (LSTUR, LightGCN) of a trained model is stored."""
     return Path(checkpoints_dir) / f"{run_name}_user_map.json"
 
 
