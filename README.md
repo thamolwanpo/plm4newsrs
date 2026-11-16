@@ -221,6 +221,20 @@ file are represented by the mean of their history items (`user_mode`).
 - Graph and tokenized titles are saved in the checkpoint; the user map is saved
   as `{run_name}_user_map.json` as for LSTUR.
 
+For code that edits a trained model (unlearning, e.g. rafu and the
+single-update framework):
+
+- The user vector is computed by a parameter-free `user_encoder` module, so a
+  forward hook on `model.user_encoder` reads or edits `u` in `s = uᵀe`, as for
+  the other architectures (`news_vector_hook` gives the item vectors). It holds
+  no weights: checkpoints are unchanged.
+- In eval mode the cached title vectors are recomputed whenever the LM weights
+  changed since they were built, and gradient passes in eval mode re-encode the
+  batch's items, so a fine-tuned LM gets gradients without dropout.
+- `remove_interactions(pairs)` deletes (user, item) edges from the graph;
+  `encode_items(idx)` runs chosen items through the LM and the content
+  projection (after `ensure_content_bank()`).
+
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `embedding_dim` | `64` | Embedding size d |
