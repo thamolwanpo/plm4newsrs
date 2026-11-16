@@ -1,6 +1,6 @@
 # PLM4NewsRS: Pre-trained Language Models for News Recommendation
 
-A research framework for neural news recommendation. Supports four SOTA architectures (Simple, NAML, NRMS, LSTUR) with BERT, RoBERTa, or GloVe backends, trained and evaluated on the clean and poisoned datasets built by [fakeun-dataprep](https://github.com/thamolwanpo/fakeun-dataprep) (fake-news poisoning, Problem 2).
+A research framework for neural news recommendation. Supports five architectures (Simple, NAML, NRMS, LSTUR, LightGCN) with BERT, RoBERTa, or GloVe backends, trained and evaluated on the clean and poisoned datasets built by [fakeun-dataprep](https://github.com/thamolwanpo/fakeun-dataprep) (fake-news poisoning, Problem 2).
 
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-ee4c2c.svg)](https://pytorch.org/)
@@ -11,7 +11,7 @@ A research framework for neural news recommendation. Supports four SOTA architec
 
 ## Highlights
 
-- **Four Model Architectures**: Simple (two-tower), NAML (multi-view), NRMS (self-attention), LSTUR (long/short-term user modeling)
+- **Five Model Architectures**: Simple (two-tower), NAML (multi-view), NRMS (self-attention), LSTUR (long/short-term user modeling), LightGCN (graph propagation over PLM title vectors)
 - **Multiple PLM Backends**: BERT, RoBERTa, or GloVe embeddings
 - **Flexible Training**: Fine-tune or freeze PLM layers
 - **Clean + Poisoned Training**: Three clean-model seeds plus one model per poisoned set (`A_r{ratio}_s{seed}`)
@@ -141,6 +141,7 @@ make run CONFIG=configs/experiments/nrms/nrms_glove.yaml \
 | **NAML** | IJCAI'19 | Multi-view: title + body + category CNNs | BERT, RoBERTa, GloVe |
 | **NRMS** | EMNLP'19 | Multi-head self-attention for news & user | BERT, RoBERTa, GloVe |
 | **LSTUR** | — | Long/short-term user interest with masking | GloVe |
+| **LightGCN** | SIGIR'20 | Light graph convolution on the user-item click graph, items initialised from PLM titles | BERT, RoBERTa |
 
 ### Simple: Two-Tower with Attention
 
@@ -199,6 +200,50 @@ Maintains a persistent long-term user embedding alongside a session-based user e
 
 **When to use:** User identity is stable across sessions; long-term preferences matter.
 
+### LightGCN: Graph Propagation over PLM Title Vectors (hybrid)
+
+```
+Layer 0:   user u → ID embedding            item i → W · (PLM(title_i)[CLS] − mean) (+ ID embedding, zero-init)
+Layers:    E^(k+1) = D^-1/2 A D^-1/2 E^(k)   (A = clicks of the training file; no transform, no nonlinearity)
+Final:     E = mean(E^(0), ..., E^(K))   →   score = <e_u, e_i>
+```
+
+The graph holds only the clicks of the training file, so clean, poisoned,
+oracle and retrain models each get their own graph (a retrain model's graph
+has no flagged fake click). Items never clicked in training (e.g. every fake
+item for the clean model) have no edge: they keep their layer-0 content vector
+at every layer, instead of a random ID embedding. Users not in the training
+file are represented by the mean of their history items (`user_mode`).
+
+- **Frozen LM:** title [CLS] vectors of all items are computed once.
+- **Fine-tuned LM:** the batch's items are re-encoded with gradients every
+  step; the other items use a cache refreshed at every training/validation epoch.
+- Graph and tokenized titles are saved in the checkpoint; the user map is saved
+  as `{run_name}_user_map.json` as for LSTUR.
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `embedding_dim` | `64` | Embedding size d |
+| `num_layers` | `3` | Propagation layers K |
+| `item_init` | `content+id` | `content` or `content+id` (adds a zero-init item ID embedding) |
+| `center_content` | `true` | Subtract the mean [CLS] vector of all items before the projection (PLM anisotropy) |
+| `user_mode` | `graph` | `graph` (propagated user embedding), `history` (mean of history items) or `graph+history` |
+| `graph_edges` | `positives` | `positives` (label=1 rows) or `positives+history` (also `history_ids`) |
+| `loss` | `ce` | `ce` (softmax over K+1, as the other models) or `bpr` (as the paper) |
+| `l2_reg` | `1e-4` | L2 on the batch's layer-0 embeddings |
+| `embedding_learning_rate` | `1e-3` | LR of ID embeddings + projection (`learning_rate` = LM LR when fine-tuned) |
+
+**Reference:**
+```bibtex
+@inproceedings{he2020lightgcn,
+  title={LightGCN: Simplifying and Powering Graph Convolution Network for Recommendation},
+  author={He, Xiangnan and Deng, Kuan and Wang, Xiang and Li, Yan and Zhang, Yongdong and Wang, Meng},
+  booktitle={SIGIR},
+  pages={639--648},
+  year={2020}
+}
+```
+
 ---
 
 ## Configuration
@@ -209,7 +254,7 @@ All experiments are driven by YAML config files. The `architecture` field determ
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `architecture` | `simple` | One of: `simple`, `naml`, `nrms`, `lstur` |
+| `architecture` | `simple` | One of: `simple`, `naml`, `nrms`, `lstur`, `lightgcn` |
 | `model_name` | `bert-base-uncased` | HuggingFace model ID or `glove` |
 | `fine_tune_lm` | `true` | Fine-tune (`true`) or freeze (`false`) PLM |
 | `max_seq_length` | `50` | Max tokens per article |
@@ -270,7 +315,7 @@ long_short_term_method: ini   # 'ini' or 'con'
 masking_probability: 0.5
 ```
 
-Pre-built configs live in `configs/experiments/{simple,naml,nrms,lstur}/`.
+Pre-built configs live in `configs/experiments/{simple,naml,nrms,lstur,lightgcn}/`.
 
 ---
 
@@ -393,8 +438,9 @@ python scripts/train.py --config configs/experiments/nrms/nrms_glove.yaml --trai
 ```
 Clean models also keep every epoch as `{run_name}-epoch=NN-val_auc=X.XXXX.ckpt`
 (`NN` 0-based); each is evaluated as its own model, `{run_name}_epochNN`.
-LSTUR models also save `{run_name}_user_map.json` next to it (the users of
-that training set; unseen users get the "unknown user" embedding).
+LSTUR and LightGCN models also save `{run_name}_user_map.json` next to it (the users of
+that training set; unseen users get the "unknown user" embedding, or for
+LightGCN the mean of their history items).
 
 Every run also saves its training dynamics (computed from the training
 forward pass; the training loss stays cross-entropy over the K+1 candidates) to `{lm_folder}/results/{run_name}_training_dynamics.pt`,
@@ -433,7 +479,7 @@ pres["scores"], pres["probs"]        # [P, K+1] logits s and softmax p (positive
 pres["loss"], pres["p0"]             # [P] cross-entropy and probability of the clicked item
 pres["margin"]                       # [P] s_0 - max s_neg (AUM-style margin)
 pres["ranked_first"]                 # [P] margin > 0 (forgetting events: True -> False)
-pres["attention"]                    # [P, H] user-encoder attention alpha_i per history slot (NaN for LSTUR)
+pres["attention"]                    # [P, H] user-encoder attention alpha_i per history slot (NaN for LSTUR and LightGCN)
 pres["history_grad_norm"]            # [P, H] ||dl/dr_i|| of the group's own loss per history slot
 pres["candidate_item_idx"]           # [P, K+1] article index of each candidate
 pres["history_item_idx"]             # [P, H] article index of each history slot (-1 = padding)
@@ -575,7 +621,7 @@ python scripts/extract_forget_features.py \
 | `--checkpoint CKPT` | — | Model to unlearn (any path; `outputs/` can live elsewhere) |
 | `--forget CSV` | — | `forget_model.csv` |
 | `--data-root DIR` | config | fakeun-dataprep output folder (for `news_items.csv`) |
-| `--user-map JSON` | next to checkpoint | LSTUR user map |
+| `--user-map JSON` | next to checkpoint | LSTUR / LightGCN user map |
 | `--out NPZ` | `<forget dir>/coresets/forget_features__<run>.npz` | Output file |
 | `--retain CSV` | `<forget dir>/retain_model.csv` | Retain set for the ALISE retain gradient |
 | `--retain-max-groups N` | 10000 | Random retain groups the retain gradient averages over (0 = all) |
@@ -666,12 +712,14 @@ plm4newsrs/
 │   │   ├── simple_config.py
 │   │   ├── naml_config.py
 │   │   ├── nrms_config.py
-│   │   └── lstur_config.py
+│   │   ├── lstur_config.py
+│   │   └── lightgcn_config.py
 │   └── experiments/            # YAML experiment configs
 │       ├── simple/
 │       ├── naml/
 │       ├── nrms/
-│       └── lstur/
+│       ├── lstur/
+│       └── lightgcn/
 ├── src/
 │   ├── data/                   # Dataset, preprocessing, collate
 │   ├── embeddings/             # GloVe utilities
@@ -681,7 +729,8 @@ plm4newsrs/
 │   │   ├── simple/
 │   │   ├── naml/
 │   │   ├── nrms/
-│   │   └── lstur/
+│   │   ├── lstur/
+│   │   └── lightgcn/           # recommender, graph building, Lightning module
 │   ├── training/               # trainer.py, callbacks.py
 │   ├── evaluation/
 │   │   ├── evaluator.py

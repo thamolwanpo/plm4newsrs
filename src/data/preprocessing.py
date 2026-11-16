@@ -142,5 +142,15 @@ def to_groups(
 
 
 def build_user_map(user_ids) -> Dict[str, int]:
-    """LSTUR user index: 1..N for known users, 0 is reserved for unknown users."""
+    """User index (LSTUR, LightGCN): 1..N for known users, 0 is reserved for unknown users."""
     return {u: i + 1 for i, u in enumerate(sorted({str(u) for u in user_ids}))}
+
+
+# Architectures with a learned per-user embedding: they index the users of the
+# training file (build_user_map), saved next to the checkpoint for evaluation.
+USER_MAP_ARCHITECTURES = ("lstur", "lightgcn")
+
+
+def needs_user_map(architecture: str) -> bool:
+    """True if the architecture looks users up by index (see build_user_map)."""
+    return architecture in USER_MAP_ARCHITECTURES

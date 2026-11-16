@@ -35,7 +35,7 @@ class BaseConfig:
     """
 
     # Architecture selection
-    architecture: str = "base"  # "simple", "naml", "nrms", "lstur"
+    architecture: str = "base"  # "simple", "naml", "nrms", "lstur", "lightgcn"
     finetune_layers: int = 0  # Number of last layers to fine-tune (BERT-base has 12 layers)
 
     # Dataset configuration

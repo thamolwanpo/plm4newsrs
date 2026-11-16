@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-CONFIG="${CONFIG:-configs/experiments/nrms/nrms_bert_frozen_politifact.yaml}"
+CONFIG="${CONFIG:-configs/experiments/lightgcn/lightgcn_bert_frozen_politifact.yaml}"
 POISON_SETS="${POISON_SETS:-A_r0.5_s1 A_r0.5_s2 A_r0.5_s3}"
 NUM_SEEDS="${NUM_SEEDS:-3}"
 LOG_DIR="${LOG_DIR:-logs}"

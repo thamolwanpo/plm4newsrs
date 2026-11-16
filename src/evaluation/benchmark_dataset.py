@@ -4,11 +4,20 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Set
 
 import torch
+import torch.nn.functional as F
 from torch.utils.data import Dataset
 from tqdm import tqdm
 
 from configs.models.simple_config import ModelConfig
-from src.data.preprocessing import PAD_ID, load_news_items, pad_history, read_model_csv, to_groups
+from src.data.preprocessing import (
+    PAD_ID,
+    load_news_index,
+    load_news_items,
+    needs_user_map,
+    pad_history,
+    read_model_csv,
+    to_groups,
+)
 
 
 class BenchmarkDataset(Dataset):
@@ -34,7 +43,7 @@ class BenchmarkDataset(Dataset):
             csv_path: Path to benchmark CSV file
             tokenizer: HuggingFace tokenizer (None for GloVe)
             config: Model configuration
-            user_map: user_id -> index map (required for LSTUR)
+            user_map: user_id -> index map (required for LSTUR and LightGCN)
             target_filter: keep only queries whose target id is in this set
             news_items: preloaded (texts, titles) dicts from load_news_items
         """
@@ -47,14 +56,20 @@ class BenchmarkDataset(Dataset):
         self.config = config
         self.use_glove = "glove" in config.model_name.lower()
 
-        self.use_lstur = config.architecture == "lstur"
+        self.use_user_map = needs_user_map(config.architecture)
         self.user_to_idx = user_map
-        if self.use_lstur and self.user_to_idx is None:
-            raise ValueError("LSTUR evaluation needs the user map saved at training time")
+        if self.use_user_map and self.user_to_idx is None:
+            raise ValueError(
+                f"{config.architecture} evaluation needs the user map saved at training time"
+            )
 
         if news_items is None:
             news_items = load_news_items(config.news_items_path)
         self.news_text_dict, self.news_title_dict = news_items
+
+        # Article index (row of news_items.csv, -1 = padding / unknown) for id-based models
+        item_ids, _ = load_news_index(config.news_items_path)
+        self.item_index = {item_id: i for i, item_id in enumerate(item_ids)}
 
         self.processed_data = [
             {
@@ -107,7 +122,7 @@ class BenchmarkDataset(Dataset):
 
     def _get_user_idx(self, user_id: Any) -> int:
         """Mapped user index, or 0 (unknown) for users not seen in training."""
-        if not self.use_lstur:
+        if not self.use_user_map:
             return 0
         return self.user_to_idx.get(str(user_id), 0)
 
@@ -119,6 +134,9 @@ class BenchmarkDataset(Dataset):
 
     def _get_title_by_id(self, item_id: str) -> str:
         return self.news_title_dict.get(item_id, "")
+
+    def _item_indices(self, ids):
+        return torch.tensor([self.item_index.get(i, -1) for i in ids], dtype=torch.long)
 
     def _stack(self, ids, key):
         return torch.stack([self.item_encodings[i][key] for i in ids])
@@ -133,6 +151,8 @@ class BenchmarkDataset(Dataset):
             "user_id": data["user_id"],
             "user_ids": torch.tensor(self._get_user_idx(data["user_id"]), dtype=torch.long),
             "impression_data": data["impressions"],
+            "candidate_item_idx": self._item_indices(candidate_ids),
+            "history_item_idx": self._item_indices(history_ids),
         }
 
         if self.use_glove:
@@ -195,6 +215,14 @@ def benchmark_collate_fn(batch):
         "impression_data": [item["impression_data"] for item in batch],
         "num_candidates": torch.tensor(num_candidates, dtype=torch.long),
         "user_ids": torch.stack([item["user_ids"] for item in batch]),
+        # Article indices; padded candidate slots get -1
+        "candidate_item_idx": torch.stack(
+            [
+                F.pad(item["candidate_item_idx"], (0, max_c - n), value=-1)
+                for item, n in zip(batch, num_candidates)
+            ]
+        ),
+        "history_item_idx": torch.stack([item["history_item_idx"] for item in batch]),
     }
 
     if "candidate_texts" in batch[0]:

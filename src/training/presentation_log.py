@@ -24,7 +24,7 @@ class PresentationLogger(Callback):
     - loss, p0: cross-entropy and probability of the clicked item
     - margin: s_0 - max s_neg; ranked_first: margin > 0 (forgetting events)
     - attention: additive-attention weight alpha_i of each history slot [P, H]
-      (NaN for LSTUR, whose user encoder is a GRU)
+      (NaN for LSTUR, whose user encoder is a GRU, and LightGCN, which has none)
     - history_grad_norm: ||dl/dr_i|| of each history slot's news vector [P, H],
       for the group's own loss l (= batch size x the batch-loss gradient)
     - candidate_item_idx [P, K+1], history_item_idx [P, H]: article indices (-1 = padding)
@@ -69,7 +69,7 @@ class PresentationLogger(Callback):
     def on_fit_start(self, trainer: pl.Trainer, pl_module: pl.LightningModule) -> None:
         model = pl_module.model
         model.news_vector_hook = self._capture_news_vectors
-        attention = _history_attention(model.user_encoder)
+        attention = _history_attention(getattr(model, "user_encoder", None))
         if attention is not None:
             self._hook_handles.append(attention.register_forward_hook(self._capture_attention))
 
@@ -228,7 +228,9 @@ class PresentationLogger(Callback):
 
 
 def _history_attention(user_encoder) -> Optional[AdditiveAttention]:
-    """The additive attention that pools the history slots (None for LSTUR)."""
+    """The additive attention that pools the history slots (None for LSTUR / LightGCN)."""
+    if user_encoder is None:
+        return None
     for name in ("news_attention", "attention"):
         module = getattr(user_encoder, name, None)
         if isinstance(module, AdditiveAttention):

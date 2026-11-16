@@ -10,14 +10,14 @@
 DATA_ROOT_ARG = $(if $(DATA_ROOT),--data-root $(DATA_ROOT),)
 
 .PHONY: help train train-clean train-poisoned evaluate run clean clean-all install \
-	train-simple-all train-nrms-all train-naml-all train-lstur-all
+	train-simple-all train-nrms-all train-naml-all train-lstur-all train-lightgcn-all
 
 help:
 	@echo "Training (clean = stage3/train_clean_model.csv, poisoned = stage4/A_*/train_model.csv):"
 	@echo "  make train CONFIG=...                         - Clean model + one poisoned model per A set"
 	@echo "  make train-clean CONFIG=...                   - Clean model only"
 	@echo "  make train-poisoned CONFIG=... POISON_SET=A_r0.5_s1"
-	@echo "  make train-simple-all | train-nrms-all | train-naml-all | train-lstur-all"
+	@echo "  make train-simple-all | train-nrms-all | train-naml-all | train-lstur-all | train-lightgcn-all"
 	@echo ""
 	@echo "Evaluation (all stage6 benchmarks):"
 	@echo "  make evaluate CONFIG=...                      - Evaluate every trained model"
@@ -60,6 +60,10 @@ train-lstur-all:
 	$(MAKE) train CONFIG=configs/experiments/lstur/lstur_glove.yaml
 	$(MAKE) train CONFIG=configs/experiments/lstur/lstur_bert_finetune.yaml
 	$(MAKE) train CONFIG=configs/experiments/lstur/lstur_bert_frozen.yaml
+
+train-lightgcn-all:
+	$(MAKE) train CONFIG=configs/experiments/lightgcn/lightgcn_bert_frozen_politifact.yaml
+	$(MAKE) train CONFIG=configs/experiments/lightgcn/lightgcn_bert_finetune_politifact.yaml
 
 # ========== Evaluation ==========
 
