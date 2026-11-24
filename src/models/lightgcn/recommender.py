@@ -7,6 +7,45 @@ import torch.nn as nn
 from transformers import AutoConfig, AutoModel
 
 
+class LightGCNUserEncoder(nn.Module):
+    """User vector used for scoring, per config.user_mode (no parameters).
+
+    A module (not a method) so that, as with the other architectures, the
+    user vector u of s = u^T e can be read or edited with a forward hook on
+    ``model.user_encoder``. It holds no weights: checkpoints are unchanged.
+
+    "history"        mean of the propagated vectors of the history articles
+    "graph"          propagated user embedding; unknown users (index 0) -> "history"
+    "graph+history"  sum of both (graph part zero for unknown users)
+    """
+
+    def __init__(self, user_mode: str):
+        super().__init__()
+        self.user_mode = user_mode
+
+    def forward(self, user_final, user_idx, history_embeddings, history_idx):
+        """
+        Args:
+            user_final: (U, d) propagated user embeddings
+            user_idx: (B,) user indices (0 = unknown user)
+            history_embeddings: (B, H, d) propagated vectors of the history articles
+            history_idx: (B, H) article indices, -1 = padding
+
+        Returns:
+            user_embedding: (B, d)
+        """
+        mask = (history_idx >= 0).unsqueeze(-1).to(history_embeddings.dtype)
+        history_mean = (history_embeddings * mask).sum(1) / mask.sum(1).clamp(min=1)
+        if self.user_mode == "history":
+            return history_mean
+
+        known = (user_idx > 0).unsqueeze(-1)
+        graph_user = user_final[user_idx]
+        if self.user_mode == "graph+history":
+            return torch.where(known, graph_user, torch.zeros_like(graph_user)) + history_mean
+        return torch.where(known, graph_user, history_mean)  # "graph"
+
+
 class LightGCNRecommenderModel(nn.Module):
     """
     Hybrid LightGCN: graph propagation over PLM title vectors.
@@ -36,7 +75,14 @@ class LightGCNRecommenderModel(nn.Module):
     saved). With a frozen LM it is computed once. With a fine-tuned LM it is
     recomputed at the start of every training / validation epoch, and during
     training the articles of the batch are re-encoded with gradients (the
-    others use their cached vector), as a memory bank.
+    others use their cached vector), as a memory bank. Gradient passes in
+    eval mode (e.g. unlearning methods that compute gradients without
+    dropout) re-encode the batch's articles in the same way.
+
+    In eval mode the bank is also recomputed when the LM weights changed
+    since it was built (cheap fingerprint of the LM parameters), so code that
+    edits the weights outside a Lightning loop (unlearning) never scores with
+    stale title vectors.
     """
 
     _GRAPH_BUFFERS = ("edge_index", "item_title_input_ids", "item_title_attention_mask")
@@ -69,6 +115,9 @@ class LightGCNRecommenderModel(nn.Module):
             self.item_id_embedding = nn.Embedding(self.num_items, dim)
             nn.init.zeros_(self.item_id_embedding.weight)
 
+        # User vector of the score (parameter-free; hookable like the other models' user encoders)
+        self.user_encoder = LightGCNUserEncoder(config.user_mode)
+
         # Filled by set_training_data() (training) or by the checkpoint (evaluation)
         self.register_buffer("edge_index", torch.zeros(2, 0, dtype=torch.long))
         self.register_buffer(
@@ -79,6 +128,7 @@ class LightGCNRecommenderModel(nn.Module):
         )
         self.register_buffer("content_bank", torch.zeros(0, self.hidden_size), persistent=False)
         self._bank_valid = False
+        self._bank_fingerprint = None  # LM fingerprint the bank was computed with
         self._norm_adj = None  # (src, dst, weight) of the normalized adjacency, built lazily
 
         # For analysis
@@ -149,6 +199,24 @@ class LightGCNRecommenderModel(nn.Module):
         """Recompute the PLM title vectors of all articles before the next forward pass."""
         self._bank_valid = False
 
+    def remove_interactions(self, pairs: torch.Tensor) -> int:
+        """Remove the (user index, article index) edges in pairs [2, P] from the graph.
+
+        Pairs that are not edges are ignored. Returns the number of edges removed.
+        Used to delete interactions without retraining (e.g. unlearning).
+        """
+        if pairs.numel() == 0 or self.edge_index.numel() == 0:
+            return 0
+        pairs = pairs.to(self.edge_index.device).long()
+        edge_code = self.edge_index[0] * self.num_items + self.edge_index[1]
+        pair_code = pairs[0] * self.num_items + pairs[1]
+        keep = ~torch.isin(edge_code, pair_code)
+        removed = int((~keep).sum())
+        if removed:
+            self.edge_index = self.edge_index[:, keep].contiguous()
+            self._norm_adj = None
+        return removed
+
     def _load_from_state_dict(self, state_dict, prefix, *args, **kwargs):
         # The graph buffers' sizes depend on the training file: take them from the checkpoint
         for name in self._GRAPH_BUFFERS:
@@ -180,6 +248,14 @@ class LightGCNRecommenderModel(nn.Module):
         )
         return out[0][:, 0].float()
 
+    @torch.no_grad()
+    def _lm_fingerprint(self):
+        """Sum and absolute sum of every LM parameter (changes when any weight changes)."""
+        params = list(self.lm.parameters())
+        sums = torch.stack([p.detach().float().sum() for p in params])
+        abs_sums = torch.stack([p.detach().float().abs().sum() for p in params])
+        return tuple(torch.cat([sums, abs_sums]).tolist())
+
     def _refresh_content_bank(self, chunk_size: int = 256) -> None:
         """PLM title vectors of every article, without gradients and without dropout."""
         if self.item_title_input_ids.size(0) != self.num_items:
@@ -199,15 +275,41 @@ class LightGCNRecommenderModel(nn.Module):
         self.lm.train(was_training)
         self.content_bank = torch.cat(chunks)
         self._bank_valid = True
+        self._bank_fingerprint = self._lm_fingerprint()
+
+    def ensure_content_bank(self) -> None:
+        """Recompute the PLM title vectors of all articles if they are missing or stale."""
+        stale = (
+            not self._bank_valid
+            or self.content_bank.device != self.content_proj.weight.device
+            # eval mode: the LM may have been edited since the bank was built
+            or (not self.training and self._lm_fingerprint() != self._bank_fingerprint)
+        )
+        if stale:
+            self._refresh_content_bank()
+
+    def encode_items(self, idx: torch.Tensor) -> torch.Tensor:
+        """Content part of the layer-0 vectors of articles idx: W (PLM(title) - mean) [len(idx), d].
+
+        The titles are run through the LM (not taken from the cache) and the
+        projection is applied to these articles only, so forward hooks on the
+        LM layers and on ``content_proj`` see exactly them (e.g. to collect the
+        layer inputs of chosen groups). Call ensure_content_bank() first: the
+        centering mean comes from the cached vectors of all articles.
+        """
+        content = self._encode_titles(idx.long())
+        if self.config.center_content:
+            content = content - self.content_bank.mean(dim=0)
+        return self.content_proj(content)
 
     def _item_layer0(self, batch_item_idx: torch.Tensor) -> torch.Tensor:
         """Layer-0 embeddings of all articles [M, d]."""
-        if not self._bank_valid or self.content_bank.device != self.content_proj.weight.device:
-            self._refresh_content_bank()
+        self.ensure_content_bank()
         content = self.content_bank
 
-        if self.training and self.lm_trainable and torch.is_grad_enabled():
-            # Re-encode the batch's articles with gradients; the rest come from the bank
+        if self.lm_trainable and torch.is_grad_enabled():
+            # Re-encode the batch's articles with gradients (training, or a
+            # gradient pass in eval mode, without dropout); the rest come from the bank
             idx = batch_item_idx[batch_item_idx >= 0].unique()
             fresh = self._encode_titles(idx)
             content = content.index_put((idx,), fresh)
@@ -325,7 +427,7 @@ class LightGCNRecommenderModel(nn.Module):
         if self.news_vector_hook is not None:
             self.news_vector_hook(candidate_embeddings, history_embeddings)
 
-        user_embedding = self._user_vector(user_final, user_idx, history_embeddings, history_idx)
+        user_embedding = self.user_encoder(user_final, user_idx, history_embeddings, history_idx)
 
         scores = torch.bmm(candidate_embeddings, user_embedding.unsqueeze(-1)).squeeze(-1)
 
@@ -343,16 +445,3 @@ class LightGCNRecommenderModel(nn.Module):
             self.intermediate_outputs["scores"] = scores.detach().cpu()
 
         return scores
-
-    def _user_vector(self, user_final, user_idx, history_embeddings, history_idx):
-        """User vector for scoring, per config.user_mode (unknown users -> history mean)."""
-        mask = (history_idx >= 0).unsqueeze(-1).to(history_embeddings.dtype)
-        history_mean = (history_embeddings * mask).sum(1) / mask.sum(1).clamp(min=1)
-        if self.config.user_mode == "history":
-            return history_mean
-
-        known = (user_idx > 0).unsqueeze(-1)
-        graph_user = user_final[user_idx]
-        if self.config.user_mode == "graph+history":
-            return torch.where(known, graph_user, torch.zeros_like(graph_user)) + history_mean
-        return torch.where(known, graph_user, history_mean)  # "graph"
