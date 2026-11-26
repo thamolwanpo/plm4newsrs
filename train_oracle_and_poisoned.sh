@@ -5,7 +5,12 @@ set -euo pipefail
 CONFIG="${CONFIG:-configs/experiments/lightgcn/lightgcn_bert_frozen_politifact.yaml}"
 POISON_SETS="${POISON_SETS:-A_r0.5_s1 A_r0.5_s2 A_r0.5_s3}"
 NUM_SEEDS="${NUM_SEEDS:-3}"
-LOG_DIR="${LOG_DIR:-logs}"
+if [ -n "${DRIVE_ROOT:-}" ]; then
+    export DRIVE_ROOT
+    LOG_DIR="${LOG_DIR:-$DRIVE_ROOT/logs}"
+else
+    LOG_DIR="${LOG_DIR:-logs}"
+fi
 
 read -r -a POISON_SET_LIST <<< "$POISON_SETS"
 if [ "${#POISON_SET_LIST[@]}" -eq 0 ]; then

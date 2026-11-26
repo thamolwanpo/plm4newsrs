@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import os
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 import yaml
@@ -81,13 +82,20 @@ class BaseConfig:
     seed: int = 42
 
     def __post_init__(self):
+        drive_root = os.environ.get("DRIVE_ROOT")
         if self.base_dir is None:
-            self.base_dir = Path(f"./outputs/{self.dataset}")
+            if drive_root:
+                self.base_dir = Path(drive_root) / "outputs" / self.dataset
+            else:
+                self.base_dir = Path(f"./outputs/{self.dataset}")
         else:
             self.base_dir = Path(self.base_dir)
 
         if self.data_root is None:
-            self.data_root = Path(f"data/problem2/{self.dataset}")
+            if drive_root:
+                self.data_root = Path(drive_root) / "data" / self.dataset
+            else:
+                self.data_root = Path(f"data/problem2/{self.dataset}")
         else:
             self.data_root = Path(self.data_root)
 

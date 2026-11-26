@@ -1,6 +1,7 @@
 """Configuration loading utilities."""
 
 from dataclasses import fields
+import os
 from pathlib import Path
 from typing import Union
 import warnings
@@ -41,6 +42,16 @@ def load_config(config_path: Union[str, Path]) -> BaseConfig:
     unknown = set(config_dict) - {f.name for f in fields(config_class)}
     if unknown:
         raise ValueError(f"Unknown config keys in {config_path}: {sorted(unknown)}")
+
+    # Override YAML paths when DRIVE_ROOT is set (e.g. Google Colab + Drive).
+    # Explicit CLI flags (--data-root, --base-dir, --output-dir) still take
+    # precedence because train.py / evaluate.py apply them after load_config().
+    drive_root = os.environ.get("DRIVE_ROOT")
+    if drive_root:
+        root = Path(drive_root)
+        dataset = config_dict.get("dataset", "politifact")
+        config_dict["data_root"] = root / "data" / dataset
+        config_dict["base_dir"] = root / "outputs" / dataset
 
     # Convert path strings to Path objects
     for key in ("base_dir", "data_root"):

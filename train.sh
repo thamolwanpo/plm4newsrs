@@ -4,7 +4,11 @@
 # Run with
 #   nohup ./train.sh > /dev/null 2>&1 &
 #
-# DATA_ROOT overrides the fakeun-dataprep output folder of each config, e.g.
+# DRIVE_ROOT overrides data_root ($DRIVE_ROOT/data/{dataset}), base_dir
+# ($DRIVE_ROOT/outputs/{dataset}), and LOG_DIR ($DRIVE_ROOT/logs), e.g.
+#   DRIVE_ROOT=/content/drive/MyDrive/P2 ./train.sh
+#
+# DATA_ROOT overrides only the fakeun-dataprep output folder of each config, e.g.
 #   DATA_ROOT=../fakeun-dataprep/output/problem2/politifact ./train.sh
 #
 # MODE=references trains (and evaluates) only the clean references of every
@@ -17,7 +21,14 @@
 #   FLAG_LEVELS  flag levels of the retrain models, e.g. "flag_050" (default: all but 100)
 #   NUM_SEEDS    seeds per file (default: 3)
 
-LOG_DIR="logs"
+POISON_SETS="${POISON_SETS:-A_r0.5_s1 A_r0.5_s2 A_r0.5_s3}"
+
+if [ -n "${DRIVE_ROOT:-}" ]; then
+    export DRIVE_ROOT
+    LOG_DIR="${LOG_DIR:-$DRIVE_ROOT/logs}"
+else
+    LOG_DIR="${LOG_DIR:-logs}"
+fi
 mkdir -p "$LOG_DIR"
 GLOBAL_LOG="$LOG_DIR/batch_log_$(date +%Y%m%d_%H%M%S).txt"
 
