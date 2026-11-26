@@ -1,4 +1,5 @@
 import copy
+import gc
 import json
 import os
 from pathlib import Path
@@ -202,7 +203,12 @@ def train_model(
     if return_trainer:
         return trainer
 
-    return str(last_epoch_checkpoint.checkpoint_path)
+    checkpoint_path = str(last_epoch_checkpoint.checkpoint_path)
+    del trainer, lit_model, train_loader, val_loader, dynamics_tracker, presentation_logger
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    return checkpoint_path
 
 
 def epoch_checkpoints(checkpoints_dir: Path, run_name: str) -> ModelCheckpoint:
@@ -435,6 +441,10 @@ def train_runs(
             traceback.print_exc()
             failed_models.append(run_name)
             continue
+        finally:
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
     # Summary
     print("\n" + "=" * 70)

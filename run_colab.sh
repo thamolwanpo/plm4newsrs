@@ -40,10 +40,12 @@ REPO_URL="${REPO_URL:-https://github.com/thamolwanpo/plm4newsrs.git}"
 BRANCH="${BRANCH:-$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo main)}"
 REMOTE_REPO_DIR="${REMOTE_REPO_DIR:-/content/plm4newsrs}"
 SCRIPT="${SCRIPT:-./train.sh}"
-GPU="${GPU:-T4}"
-HIGH_MEM="${HIGH_MEM:-0}"
+GPU="${GPU:-L4}"
+HIGH_MEM="${HIGH_MEM:-1}"
 REUSE_SESSION="${REUSE_SESSION:-0}"
+SKIP_MOUNT="${SKIP_MOUNT:-0}"
 STOP_ON_FINISH="${STOP_ON_FINISH:-0}"
+TIMEOUT="${TIMEOUT:-0}"
 
 if ! command -v colab >/dev/null 2>&1; then
     echo "ERROR: 'colab' CLI not found." >&2
@@ -63,8 +65,10 @@ if [ "$REUSE_SESSION" != "1" ]; then
     colab new "${NEW_ARGS[@]}"
 fi
 
-echo "==> Mounting Google Drive on session '$SESSION'..."
-colab drivemount -s "$SESSION"
+if [ "$SKIP_MOUNT" != "1" ]; then
+    echo "==> Mounting Google Drive on session '$SESSION'..."
+    colab drivemount -s "$SESSION"
+fi
 
 echo "==> Running '$SCRIPT' on Colab with DRIVE_ROOT='$DRIVE_ROOT'..."
 PAYLOAD="$(
@@ -91,7 +95,7 @@ print(json.dumps({k: os.environ.get(k, "") for k in keys}))
 '
 )"
 
-colab exec -s "$SESSION" <<EOF
+colab exec -s "$SESSION" --timeout "$TIMEOUT" <<EOF
 import json
 import os
 import shlex
@@ -128,7 +132,7 @@ deps = (
     "tokenizers>=0.13.0 sentencepiece>=0.1.99 hf_transfer>=0.1.9 "
     "pyarrow python-dotenv pyyaml tqdm scikit-learn plotly seaborn matplotlib"
 )
-run(f"{shlex.quote(sys.executable)} -m pip install -q {deps}")
+run(f"{shlex.quote(sys.executable)} -m pip install {deps}")
 
 # 4. Run training script with DRIVE_ROOT and forwarded env vars
 env = os.environ.copy()

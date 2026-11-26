@@ -36,7 +36,7 @@ CONFIGS=(
     configs/experiments/naml/naml_bert_frozen_politifact.yaml
     configs/experiments/lstur/lstur_bert_frozen_politifact.yaml
     configs/experiments/nrms/nrms_bert_frozen_politifact.yaml
-    configs/experiments/lightgcn/lightgcn_bert_frozen_politifact.yaml
+    # configs/experiments/lightgcn/lightgcn_bert_frozen_politifact.yaml
     # configs/experiments/naml/naml_bert_frozen_gossipcop.yaml
     # configs/experiments/lstur/lstur_bert_frozen_gossipcop.yaml
     # configs/experiments/nrms/nrms_bert_frozen_gossipcop.yaml
@@ -69,7 +69,7 @@ if [ "$MODE" = "references" ] || [ "$MODE" = "oracle" ]; then
     [ -n "$POISON_SETS" ] && TRAIN_ARGS+=(--poison-sets $POISON_SETS)
     [ -n "$FLAG_LEVELS" ] && TRAIN_ARGS+=(--flag-levels $FLAG_LEVELS)
 else
-    TRAIN_ARGS=(--train-all)
+    TRAIN_ARGS=(--train-all --skip-existing)
     EVAL_ARGS=()
 fi
 
