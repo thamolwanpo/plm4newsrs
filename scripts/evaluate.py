@@ -100,6 +100,11 @@ Examples:
     parser.add_argument(
         "--generate-report", action="store_true", help="Write evaluation_report.txt"
     )
+    parser.add_argument(
+        "--mia-only",
+        action="store_true",
+        help="Compute score-based MIA-AUC post-hoc from existing *_detailed.parquet files in results_dir (no inference)",
+    )
     parser.add_argument("--gpu", type=int, help="GPU device ID (default: auto-detect)")
     parser.add_argument("--seed", type=int, help="Random seed (default: from config)")
     parser.add_argument("--verbose", action="store_true", help="Print detailed information")
@@ -142,6 +147,24 @@ Examples:
     evaluator = ModelEvaluator(config=config, device=device, enable_analyses=enable_analyses)
 
     try:
+        if args.mia_only:
+            mia_df = evaluator.evaluate_mia(model_names=args.models, from_disk=True)
+            if mia_df.empty:
+                print(f"❌ No matching poison/pattern probe *_detailed.parquet files found in {evaluator.results_dir}")
+                return 1
+            cols = [
+                "model",
+                "member_benchmark",
+                "non_member_benchmark",
+                "mia_auc_score",
+                "mia_auc_score_dist",
+                "mia_auc_prob",
+                "mia_auc_rank",
+                "mia_auc_item_score",
+            ]
+            print(mia_df[cols].to_string(index=False, float_format="%.4f"))
+            return 0
+
         if args.model_path:
             model_path = Path(args.model_path)
             if not model_path.exists():
@@ -153,6 +176,7 @@ Examples:
                 return 1
             evaluator.evaluate_checkpoint(model_path, None, benchmark_files)
             summary_df = evaluator.save_summary()
+            evaluator.evaluate_mia()
         else:
             summary_df = evaluator.evaluate_all(
                 model_names=args.models, benchmark_names=args.benchmarks
@@ -185,8 +209,24 @@ Examples:
         print(f"{'='*70}")
         cols = ["model", "benchmark", "n_queries", "AUC", "MRR", "NDCG@10", "HR@10"]
         print(summary_df[cols].to_string(index=False, float_format="%.4f"))
+        if not evaluator.mia_results.empty:
+            print(f"\n{'─'*70}")
+            print("UNLEARNING VERIFICATION: SCORE-BASED MIA-AUC")
+            print(f"{'─'*70}")
+            mia_cols = [
+                "model",
+                "member_benchmark",
+                "mia_auc_score",
+                "mia_auc_score_dist",
+                "mia_auc_prob",
+                "mia_auc_rank",
+                "mia_auc_item_score",
+            ]
+            print(evaluator.mia_results[mia_cols].to_string(index=False, float_format="%.4f"))
         print(f"\n📁 Results saved in: {evaluator.results_dir}")
         print("  • evaluation_summary.csv - metrics per model x benchmark")
+        if not evaluator.mia_results.empty:
+            print("  • mia_summary.csv - score-based MIA-AUC (poison probe vs pattern probe)")
         print("  • <model>__<benchmark>_detailed.parquet - per-candidate scores")
         return 0
 

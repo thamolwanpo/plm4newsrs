@@ -10,7 +10,14 @@ from .analyzers import (
 )
 
 # Import metrics
-from .metrics import query_ranking_metrics, calculate_mc_at_k
+from .metrics import (
+    query_ranking_metrics,
+    calculate_score_mia,
+    compute_mia_from_detailed,
+    compute_mia_from_results_dir,
+    calculate_mc_at_k,
+    calculate_afr_at_k,
+)
 
 __all__ = [
     # Main classes
@@ -24,5 +31,9 @@ __all__ = [
     "FailureAnalyzer",
     # Metrics
     "query_ranking_metrics",
+    "calculate_score_mia",
+    "compute_mia_from_detailed",
+    "compute_mia_from_results_dir",
     "calculate_mc_at_k",
+    "calculate_afr_at_k",
 ]

@@ -574,8 +574,20 @@ target), `MRR`, `NDCG@5/10`, `HR@5/10`, `mean_rank`, `mean_percentile`
 adversarial and probe benchmarks the target is fake, so lower ranking metrics
 mean the model promotes that fake news less.
 
+**Unlearning Verification (Score-based MIA-AUC)**: Whenever both a poison probe
+(Members: `poison_probe_realneg@<A_set>` / `poison_probe@<A_set>`, plus full
+pool) and its matching pattern probe (Non-members: `pattern_probe_realneg` /
+`pattern_probe`) are evaluated, `ModelEvaluator` automatically computes
+score-based MIA-AUC with no extra inference and writes `mia_summary.csv`:
+`mia_auc_score` (raw target logit ROC-AUC; ideal ≈ 0.5),
+`mia_auc_score_dist` (`|mia_auc_score - 0.5|`), `mia_auc_prob` (softmax
+probability), `mia_auc_rank` (per-query ranking AUC), and `mia_auc_item_score`
+(item-level mean target score). Run `scripts/evaluate.py --config ... --mia-only`
+to compute `mia_summary.csv` post-hoc from existing `*_detailed.parquet` files.
+
 **Outputs** in `{base_dir}/{experiment_name}/{lm_folder}/results/`:
 `evaluation_summary.csv` (one row per model × benchmark),
+`mia_summary.csv` (score-based MIA-AUC per model × probe pair),
 `{model}__{benchmark}_detailed.parquet` (score of every candidate),
 `evaluation_report.txt` (`--generate-report`), and analyzer summaries/plots.
 
@@ -593,6 +605,7 @@ mean the model promotes that fake news less.
 | `--no-analysis` | off | Metrics only |
 | `--top-k K` | 10 | Top-K for the exposure analysis |
 | `--generate-report` | off | Write `evaluation_report.txt` |
+| `--mia-only` | off | Compute `mia_summary.csv` post-hoc from saved `*_detailed.parquet` files |
 
 ### Analyzers
 

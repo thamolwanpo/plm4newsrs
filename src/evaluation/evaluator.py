@@ -18,7 +18,8 @@ from src.utils.seed import set_seed
 
 from .analyzers import ExposureAnalyzer, TruthDecayAnalyzer, FailureAnalyzer
 from .benchmark_dataset import BenchmarkDataset, benchmark_collate_fn
-from .metrics.misinformation import calculate_fake_exposure, calculate_mc_at_k
+from .metrics.mia import compute_mia_from_detailed, compute_mia_from_results_dir
+from .metrics.misinformation import calculate_afr_at_k, calculate_fake_exposure, calculate_mc_at_k
 from .metrics.ranking import query_ranking_metrics
 from .visualizer import EvaluationVisualizer
 
@@ -129,6 +130,7 @@ class ModelEvaluator:
         # (model, benchmark) -> metrics dict / detailed results
         self.evaluation_results: Dict[Tuple[str, str], Dict[str, Any]] = {}
         self.detailed_results: Dict[Tuple[str, str], pd.DataFrame] = {}
+        self.mia_results: pd.DataFrame = pd.DataFrame()
 
         self._news_items = None
         self._benchmark_cache: Dict[str, BenchmarkDataset] = {}
@@ -272,7 +274,9 @@ class ModelEvaluator:
 
                 traceback.print_exc()
 
-        return self.save_summary()
+        summary_df = self.save_summary()
+        self.evaluate_mia()
+        return summary_df
 
     def evaluate_checkpoint(
         self, model_path: Path, run_name: Optional[str], benchmark_files: List[Path]
@@ -509,6 +513,7 @@ class ModelEvaluator:
         # Fake exposure among the top-k of each query (ignores the target's label)
         for k in (5, 10, 20):
             metrics[f"MC@{k}"] = calculate_mc_at_k(results_df, k=k, group_by="query_id")
+            metrics[f"AFR@{k}"] = calculate_afr_at_k(results_df, k=k, group_by="query_id")
         for k in (10, 20):
             exposure = calculate_fake_exposure(results_df, k=k, group_by="query_id")
             metrics[f"avg_fake_in_top_{k}"] = exposure["avg_fake_count"]
@@ -524,6 +529,51 @@ class ModelEvaluator:
         summary_df.to_csv(summary_path, index=False)
         print(f"\n✅ Saved summary: {summary_path}")
         return summary_df
+
+    def evaluate_mia(
+        self,
+        model_names: Optional[List[str]] = None,
+        from_disk: bool = False,
+        save: bool = True,
+    ) -> pd.DataFrame:
+        """Compute score-based MIA-AUC (poison_probe* as Member vs pattern_probe* as Non-member).
+
+        Uses already-scored `self.detailed_results` (no extra inference), or
+        reloads saved `*_detailed.parquet` files from `self.results_dir` when
+        `from_disk=True`.
+        """
+        if from_disk:
+            mia_df = compute_mia_from_results_dir(
+                self.results_dir,
+                save=False,
+                parse_run_fn=parse_run_name,
+                split_epoch_fn=split_epoch,
+            )
+            if model_names and not mia_df.empty:
+                mask = mia_df["model"].apply(
+                    lambda m: any(m == f or m.startswith(f) for f in model_names)
+                )
+                mia_df = mia_df[mask].reset_index(drop=True)
+        else:
+            detailed = self.detailed_results
+            if model_names:
+                detailed = {
+                    k: v
+                    for k, v in detailed.items()
+                    if any(k[0] == f or k[0].startswith(f) for f in model_names)
+                }
+            mia_df = compute_mia_from_detailed(
+                detailed,
+                parse_run_fn=parse_run_name,
+                split_epoch_fn=split_epoch,
+            )
+
+        self.mia_results = mia_df
+        if save and not mia_df.empty:
+            mia_path = self.results_dir / "mia_summary.csv"
+            mia_df.to_csv(mia_path, index=False)
+            print(f"✅ Saved MIA summary: {mia_path}")
+        return mia_df
 
     # ------------------------------------------------------------------ #
     # Analyses
@@ -676,10 +726,24 @@ class ModelEvaluator:
 
         if self.evaluation_results:
             summary = pd.DataFrame(list(self.evaluation_results.values()))
-            cols = ["model", "benchmark", "n_queries", "AUC", "MRR", "NDCG@10", "HR@10", "MC@10"]
+            cols = ["model", "benchmark", "n_queries", "AUC", "MRR", "NDCG@10", "HR@10", "MC@10", "AFR@10"]
             for bench, group in summary.groupby("benchmark", sort=False):
                 lines.append(f"\n[{bench}]")
                 lines.append(group[cols].to_string(index=False, float_format="%.4f"))
+
+        if not self.mia_results.empty:
+            lines.append("\n[MIA-AUC (Unlearning Verification: Poison Probe vs Pattern Probe)]")
+            mia_cols = [
+                "model",
+                "member_benchmark",
+                "non_member_benchmark",
+                "mia_auc_score",
+                "mia_auc_score_dist",
+                "mia_auc_prob",
+                "mia_auc_rank",
+                "mia_auc_item_score",
+            ]
+            lines.append(self.mia_results[mia_cols].to_string(index=False, float_format="%.4f"))
 
         lines += ["", "=" * 70, "END OF REPORT", "=" * 70]
         with open(output_path, "w") as f:

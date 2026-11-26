@@ -64,6 +64,53 @@ def calculate_mc_at_k(results_df: pd.DataFrame, k: int, group_by: str = "user_id
     return np.mean(mc_scores) if mc_scores else 0.0
 
 
+def calculate_afr_at_k(results_df: pd.DataFrame, k: int, group_by: str = "user_id") -> float:
+    """
+    Calculate Average Fake News Rank at k (AFR@k).
+
+    Mean rank of the fake items in each group's top-k, averaged over only the
+    groups with at least one fake item in their top-k. A higher AFR means the
+    fake items that remain sit lower in the list. Because groups without fake
+    items are excluded, report it alongside MC@k.
+
+    Args:
+        results_df: DataFrame with columns ['user_id', 'score', 'is_fake']
+        k: Cutoff position
+        group_by: Column to group by (default: 'user_id')
+
+    Returns:
+        Average AFR@k over groups with a fake item in their top-k
+        (NaN if there are none)
+
+    Formula:
+        AFR@k = mean over groups of (mean 1-indexed rank of fake news in top-k)
+
+    Example:
+        >>> df = pd.DataFrame({
+        ...     'user_id': [1, 1, 1, 2, 2, 2, 3, 3, 3],
+        ...     'score': [0.9, 0.7, 0.5, 0.8, 0.6, 0.4, 0.9, 0.8, 0.7],
+        ...     'is_fake': [0, 1, 0, 1, 1, 0, 0, 0, 0]
+        ... })
+        >>> afr = calculate_afr_at_k(df, k=2)
+        >>> # User 1: fake in top-2 at rank 2 -> 2.0
+        >>> # User 2: fake in top-2 at ranks 1, 2 -> 1.5
+        >>> # User 3: no fake in top-2 -> excluded
+        >>> # Average = (2.0 + 1.5) / 2 = 1.75
+    """
+    afr_scores = []
+
+    for _, group in results_df.groupby(group_by):
+        # Sort by score descending and take top-k
+        top_k = _worst_case_order(group).head(k)
+
+        # 1-indexed ranks of the fake news in top-k
+        fake_ranks = np.flatnonzero(top_k["is_fake"].to_numpy(dtype=bool)) + 1
+        if len(fake_ranks) > 0:
+            afr_scores.append(fake_ranks.mean())
+
+    return float(np.mean(afr_scores)) if afr_scores else float("nan")
+
+
 def calculate_fake_exposure(
     results_df: pd.DataFrame, k: int = 10, group_by: str = "user_id"
 ) -> Dict[str, float]:
