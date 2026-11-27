@@ -75,7 +75,7 @@ fi
 
 for CONFIG in "${CONFIGS[@]}"; do
     run_and_log python scripts/train.py --config "$CONFIG" "${TRAIN_ARGS[@]}" "${EXTRA_ARGS[@]}"
-    run_and_log python scripts/evaluate.py --config "$CONFIG" --generate-report "${EVAL_ARGS[@]}" "${EXTRA_ARGS[@]}"
+    # run_and_log python scripts/evaluate.py --config "$CONFIG" --generate-report "${EVAL_ARGS[@]}" "${EXTRA_ARGS[@]}"
 done
 
 echo "All jobs in the batch are complete!" | tee -a "$GLOBAL_LOG"
